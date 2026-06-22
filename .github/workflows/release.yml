@@ -143,6 +143,7 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           if gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$VERSION" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$VERSION"
             gh release upload "$VERSION" release/* --repo "$GITHUB_REPOSITORY" --clobber
           else
             gh release create "$VERSION" release/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$VERSION" --generate-notes
