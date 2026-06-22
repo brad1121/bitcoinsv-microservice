@@ -1,21 +1,12 @@
 services:
   bsv-node:
     image: ${BSV_NODE_IMAGE:-bitcoinsv/bitcoin-sv:latest}
-    command:
-      - bitcoind
-      - -regtest
-      - -server
-      - -listen=1
-      - -txindex=1
-      - -port=18444
-      - -bind=0.0.0.0:18444
-      - -rpcbind=0.0.0.0
-      - -rpcallowip=0.0.0.0/0
-      - -rpcuser=bsv
-      - -rpcpassword=bsv
-      - -minminingtxfee=0.00000001
-      - -printtoconsole
+    entrypoint: ["/bin/sh", "/workspace/docker/bsv-node/start.sh"]
+    environment:
+      INITIAL_BLOCK_HEIGHT: ${INITIAL_BLOCK_HEIGHT:-10001}
+      MINE_INTERVAL_SECONDS: ${MINE_INTERVAL_SECONDS:-20}
     volumes:
+      - ./docker/bsv-node/start.sh:/workspace/docker/bsv-node/start.sh:ro
       - bsv-node-data:/home/bitcoin/.bitcoin
     ports:
       - "18444:18444"
@@ -30,11 +21,38 @@ services:
       - -peers=bsv-node:18444
       - -data-dir=/data
     depends_on:
-      - bsv-node
+      bsv-node:
+        condition: service_started
+        restart: true
     volumes:
       - bsvms-data:/data
     ports:
       - "50051:50051"
+
+  woc-explorer:
+    image: ${WOC_EXPLORER_IMAGE:-brad1121/woc-explorer:latest}
+    depends_on:
+      - bsv-node
+    volumes:
+      - ./docker/woc-explorer/credentials.js:/workspace/app/credentials.js:ro
+    ports:
+      - "3002:3002"
+
+  blackjack-fund:
+    image: ${BSVMS_IMAGE:-ghcr.io/brad1121/bitcoinsv-microservice:latest}
+    entrypoint: ["/usr/local/bin/blackjack"]
+    command: ["-fund"]
+    environment:
+      BSVMS_ADDR: bsvms:50051
+      BSVMS_REGTEST_PEER: bsv-node:18444
+      BSV_NODE_RPC_URL: http://bsv-node:18443
+      BSV_NODE_RPC_USER: bsv
+      BSV_NODE_RPC_PASSWORD: bsv
+    depends_on:
+      bsv-node:
+        condition: service_started
+      bsvms:
+        condition: service_started
 
   blackjack:
     image: ${BSVMS_IMAGE:-ghcr.io/brad1121/bitcoinsv-microservice:latest}
@@ -42,8 +60,13 @@ services:
     entrypoint: ["/usr/local/bin/blackjack"]
     environment:
       BSVMS_ADDR: bsvms:50051
+      BSVMS_REGTEST_PEER: bsv-node:18444
+      WOC_EXPLORER_URL: http://localhost:3002
     depends_on:
-      - bsvms
+      bsvms:
+        condition: service_started
+      blackjack-fund:
+        condition: service_completed_successfully
     stdin_open: true
     tty: true
 

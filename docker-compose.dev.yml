@@ -1,0 +1,14 @@
+services:
+  bsvms:
+    image: bsvms:dev
+    build:
+      context: .
+      dockerfile: Dockerfile
+      additional_contexts:
+        sdk: ../bitcoinsv-sdk-go
+
+  blackjack-fund:
+    image: bsvms:dev
+
+  blackjack:
+    image: bsvms:dev

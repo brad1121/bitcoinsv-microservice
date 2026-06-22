@@ -60,7 +60,29 @@ Play blackjack in an interactive console:
 docker compose run --rm blackjack
 ```
 
-The blackjack service is profile-gated, so plain `docker compose up` starts only the node and bsvms. `docker compose run` starts a one-shot interactive game container attached to your terminal. This pulls the public bsvms image from GHCR. No SDK checkout is required.
+The blackjack service is profile-gated, so plain `docker compose up` starts the node, bsvms, local explorer, and a one-shot `blackjack-fund` container. `docker compose run --rm blackjack` starts the interactive game. This pulls the public bsvms image from GHCR and explorer image from Docker Hub. No SDK checkout is required.
+
+The regtest node mines to height `10001` at startup so coinbase funds are mature and Genesis rules are active, then `blackjack-fund` funds the bsvms blackjack wallets with real on-chain transactions. After that, blackjack settlements are sent through bsvms P2P broadcast. The node mines one new block every minute by default so settlement transactions confirm automatically. The local WhatsOnChain explorer at `http://localhost:3002` shows wallet addresses and settlement transactions.
+
+Compose services:
+
+- `bsv-node`: local BSV regtest P2P node on `18444`
+- `bsvms`: gRPC service on `50051`, connected to `bsv-node:18444`
+- `woc-explorer`: local explorer on `3002`, using `brad1121/woc-explorer`, connected to `bsv-node` RPC
+- `blackjack-fund`: one-shot startup funder for blackjack wallets using node RPC only for initial regtest funding
+- `blackjack`: console game using bsvms wallets and settlement transactions
+
+### Local Development
+
+Build and run from source (requires `../bitcoinsv-sdk-go`):
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.dev.yml build
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+docker compose run --rm blackjack
+```
+
+### Options
 
 Pin a release image:
 
@@ -68,16 +90,22 @@ Pin a release image:
 BSVMS_IMAGE=ghcr.io/brad1121/bitcoinsv-microservice:v0.1.0 docker compose run --rm blackjack
 ```
 
-Compose services:
-
-- `bsv-node`: local BSV regtest P2P node on `18444`
-- `bsvms`: gRPC service on `50051`, connected to `bsv-node:18444`
-- `blackjack`: console game using bsvms wallets and settlement transactions
-
-If your BSV node image differs, override:
+Override BSV node image:
 
 ```sh
-BSV_NODE_IMAGE=your/image:tag docker compose run --rm blackjack
+BSV_NODE_IMAGE=your/image:tag docker compose up -d
+```
+
+Override mining interval (default 60s):
+
+```sh
+MINE_INTERVAL_SECONDS=300 docker compose up -d
+```
+
+Override startup chain height (default 10001):
+
+```sh
+INITIAL_BLOCK_HEIGHT=10001 docker compose up -d
 ```
 
 ## Releases

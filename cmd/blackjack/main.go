@@ -2,12 +2,15 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"math/rand"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -28,6 +31,7 @@ const (
 	houseWallet  = "house"
 	seedSatoshis = 250_000
 	defaultBet   = 1_000
+	regtestPeer  = "bsv-node:18444"
 )
 
 type wallet struct {
@@ -40,7 +44,12 @@ func main() {
 		fmt.Println(version)
 		return
 	}
+	if len(os.Args) == 2 && os.Args[1] == "-fund" {
+		fundMain()
+		return
+	}
 	addr := env("BSVMS_ADDR", "bsvms:50051")
+	explorerURL := strings.TrimRight(env("WOC_EXPLORER_URL", "http://localhost:3002"), "/")
 	ctx := context.Background()
 	client, closeConn, err := connect(ctx, addr)
 	if err != nil {
@@ -50,19 +59,24 @@ func main() {
 
 	player := ensureWallet(ctx, client, playerWallet)
 	house := ensureWallet(ctx, client, houseWallet)
-	seedWallet(ctx, client, player, seedSatoshis)
-	seedWallet(ctx, client, house, seedSatoshis)
+	network := statusNetwork(ctx, client)
+	if network == "regtest" {
+		ensureRegtestPeer(ctx, client)
+	}
+	requireFunded(ctx, client, player)
+	requireFunded(ctx, client, house)
 
 	fmt.Println("BSV blackjack")
-	fmt.Println("Network: regtest via bsvms")
+	fmt.Printf("Network: %s via bsvms\n", network)
 	fmt.Printf("Player address: %s\n", player.address)
 	fmt.Printf("House address:  %s\n", house.address)
+	printAddressLinks(network, explorerURL, player, house)
 	fmt.Println()
 
 	reader := bufio.NewReader(os.Stdin)
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	for {
-		playHand(ctx, client, reader, rng, player, house)
+		playHand(ctx, client, reader, rng, explorerURL, player, house)
 		fmt.Print("Play again? [y/N]: ")
 		line, _ := reader.ReadString('\n')
 		if strings.ToLower(strings.TrimSpace(line)) != "y" {
@@ -113,34 +127,18 @@ func ensureWallet(ctx context.Context, client bsvmspb.BSVMSClient, id string) wa
 	return wallet{id: id, address: addr.GetAddress().GetAddress()}
 }
 
-func seedWallet(ctx context.Context, client bsvmspb.BSVMSClient, w wallet, minBalance int64) {
+func requireFunded(ctx context.Context, client bsvmspb.BSVMSClient, w wallet) {
 	bal, err := client.Balance(ctx, &bsvmspb.BalanceRequest{TenantId: tenantID, WalletId: w.id})
 	if err != nil {
 		log.Fatalf("balance %s: %v", w.id, err)
 	}
-	if bal.GetSatoshis() >= minBalance/2 {
+	if bal.GetSatoshis() >= defaultBet {
 		return
 	}
-	out, err := client.P2PKHOutput(ctx, &bsvmspb.P2PKHOutputRequest{Address: w.address, Value: minBalance})
-	if err != nil {
-		log.Fatalf("p2pkh %s: %v", w.id, err)
-	}
-	txid := fakeTxID(w.id, time.Now().UnixNano())
-	if _, err := client.ImportUTXO(ctx, &bsvmspb.ImportUTXORequest{
-		TenantId: tenantID,
-		WalletId: w.id,
-		Txid:     txid,
-		Vout:     0,
-		Value:    minBalance,
-		Script:   out.GetScript(),
-		Height:   1,
-		Force:    true,
-	}); err != nil {
-		log.Fatalf("seed %s: %v", w.id, err)
-	}
+	log.Fatalf("%s wallet has %d sats; run `docker compose up -d` and wait for blackjack-fund to complete", w.id, bal.GetSatoshis())
 }
 
-func playHand(ctx context.Context, client bsvmspb.BSVMSClient, reader *bufio.Reader, rng *rand.Rand, player, house wallet) {
+func playHand(ctx context.Context, client bsvmspb.BSVMSClient, reader *bufio.Reader, rng *rand.Rand, explorerURL string, player, house wallet) {
 	bet := askBet(reader)
 	deck := newDeck(rng)
 	playerHand := []card{draw(&deck), draw(&deck)}
@@ -171,11 +169,15 @@ func playHand(ctx context.Context, client bsvmspb.BSVMSClient, reader *bufio.Rea
 
 	switch outcome(playerTotal, houseTotal) {
 	case "player":
-		txid := send(ctx, client, house, player.address, int64(bet))
-		fmt.Printf("You win %d sats. Settlement tx: %s\n\n", bet, txid)
+		txid := settleHand(ctx, client, house, player.address, int64(bet), playerHand, houseHand, "player")
+		fmt.Printf("You win %d sats. Settlement tx: %s\n", bet, txid)
+		printTxLink(ctx, client, explorerURL, txid)
+		fmt.Println()
 	case "house":
-		txid := send(ctx, client, player, house.address, int64(bet))
-		fmt.Printf("House wins %d sats. Settlement tx: %s\n\n", bet, txid)
+		txid := settleHand(ctx, client, player, house.address, int64(bet), playerHand, houseHand, "house")
+		fmt.Printf("House wins %d sats. Settlement tx: %s\n", bet, txid)
+		printTxLink(ctx, client, explorerURL, txid)
+		fmt.Println()
 	default:
 		fmt.Println("Push. No settlement.")
 		fmt.Println()
@@ -197,17 +199,90 @@ func askBet(reader *bufio.Reader) int {
 	return n
 }
 
-func send(ctx context.Context, client bsvmspb.BSVMSClient, from wallet, to string, sats int64) string {
-	resp, err := client.Send(ctx, &bsvmspb.SendRequest{
-		TenantId:       tenantID,
-		WalletId:       from.id,
-		ToAddress:      to,
-		AmountSatoshis: sats,
-	})
+type handResult struct {
+	Game        string   `json:"game"`
+	Player      []string `json:"player"`
+	House       []string `json:"house"`
+	PlayerTotal int      `json:"player_total"`
+	HouseTotal  int      `json:"house_total"`
+	Bet         int64    `json:"bet"`
+	Winner      string   `json:"winner"`
+}
+
+func settleHand(ctx context.Context, client bsvmspb.BSVMSClient, from wallet, to string, sats int64, playerHand, houseHand []card, winner string) string {
+	ensureRegtestPeer(ctx, client)
+
+	p2pkh, err := client.P2PKHOutput(ctx, &bsvmspb.P2PKHOutputRequest{Address: to, Value: sats})
 	if err != nil {
-		log.Fatalf("settle from %s: %v", from.id, err)
+		log.Fatalf("p2pkh output: %v", err)
 	}
-	return resp.GetTxid()
+
+	result := handResult{
+		Game:        "blackjack",
+		Player:      handStringParts(playerHand),
+		House:       handStringParts(houseHand),
+		PlayerTotal: handValue(playerHand),
+		HouseTotal:  handValue(houseHand),
+		Bet:         sats,
+		Winner:      winner,
+	}
+	raw, err := json.Marshal(result)
+	if err != nil {
+		log.Fatalf("encode hand result: %v", err)
+	}
+	opReturn, err := client.OpReturnOutput(ctx, &bsvmspb.OpReturnOutputRequest{Data: raw})
+	if err != nil {
+		log.Fatalf("op_return output: %v", err)
+	}
+
+	for deadline := time.Now().Add(60 * time.Second); ; {
+		detail, err := client.SpendToOutputs(ctx, &bsvmspb.SpendToOutputsRequest{
+			TenantId: tenantID,
+			WalletId: from.id,
+			Outputs:  []*bsvmspb.OutputSpec{p2pkh, opReturn},
+		})
+		if err == nil {
+			return detail.GetDetail().GetTxid()
+		}
+		if strings.Contains(err.Error(), "no connected peers") {
+			ensureRegtestPeer(ctx, client)
+			detail, err := client.SpendToOutputs(ctx, &bsvmspb.SpendToOutputsRequest{
+				TenantId: tenantID,
+				WalletId: from.id,
+				Outputs:  []*bsvmspb.OutputSpec{p2pkh, opReturn},
+			})
+			if err == nil {
+				return detail.GetDetail().GetTxid()
+			}
+		}
+		if time.Now().After(deadline) {
+			log.Fatalf("settle from %s: %v", from.id, err)
+		}
+		time.Sleep(time.Second)
+	}
+}
+
+func ensureRegtestPeer(ctx context.Context, client bsvmspb.BSVMSClient) {
+	peer := env("BSVMS_REGTEST_PEER", regtestPeer)
+	deadline := time.Now().Add(60 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		st, err := client.Status(ctx, &bsvmspb.StatusRequest{})
+		if err == nil && strings.ToLower(st.GetNetwork()) != "regtest" {
+			return
+		}
+		if err == nil && st.GetPeerCount() > 0 {
+			return
+		}
+		if _, err := client.ConnectPeer(ctx, &bsvmspb.ConnectPeerRequest{Address: peer}); err != nil {
+			lastErr = err
+		}
+		time.Sleep(time.Second)
+	}
+	if lastErr != nil {
+		log.Fatalf("connect regtest peer %s: %v", peer, lastErr)
+	}
+	log.Fatalf("connect regtest peer %s: timed out", peer)
 }
 
 func showBalances(ctx context.Context, client bsvmspb.BSVMSClient) {
@@ -218,6 +293,290 @@ func showBalances(ctx context.Context, client bsvmspb.BSVMSClient) {
 		}
 		fmt.Printf("%s balance: %d sats\n", id, bal.GetSatoshis())
 	}
+}
+
+func statusNetwork(ctx context.Context, client bsvmspb.BSVMSClient) string {
+	status, err := client.Status(ctx, &bsvmspb.StatusRequest{})
+	if err != nil {
+		log.Fatalf("status: %v", err)
+	}
+	return status.GetNetwork()
+}
+
+func printAddressLinks(network, explorerURL string, player, house wallet) {
+	playerURL := wocAddressURL(network, explorerURL, player.address)
+	houseURL := wocAddressURL(network, explorerURL, house.address)
+	if playerURL == "" || houseURL == "" {
+		return
+	}
+	fmt.Printf("Player explorer: %s\n", playerURL)
+	fmt.Printf("House explorer:  %s\n", houseURL)
+}
+
+func printTxLink(ctx context.Context, client bsvmspb.BSVMSClient, explorerURL, txid string) {
+	network := statusNetwork(ctx, client)
+	if url := wocTxURL(network, explorerURL, txid); url != "" {
+		fmt.Printf("Explorer: %s\n", url)
+		return
+	}
+	fmt.Printf("Inspect after next mined block: docker compose exec bsv-node bitcoin-cli -regtest -rpcuser=bsv -rpcpassword=bsv getrawtransaction %s 1\n", txid)
+}
+
+func wocAddressURL(network, explorerURL, address string) string {
+	base := wocBaseURL(network, explorerURL)
+	if base == "" {
+		return ""
+	}
+	return base + "/address/" + address
+}
+
+func wocTxURL(network, explorerURL, txid string) string {
+	base := wocBaseURL(network, explorerURL)
+	if base == "" {
+		return ""
+	}
+	return base + "/tx/" + txid
+}
+
+func wocBaseURL(network, explorerURL string) string {
+	switch strings.ToLower(network) {
+	case "regtest":
+		return explorerURL
+	case "mainnet":
+		return "https://whatsonchain.com"
+	case "testnet":
+		return "https://test.whatsonchain.com"
+	case "stn":
+		return "https://stn.whatsonchain.com"
+	default:
+		return ""
+	}
+}
+
+func fundMain() {
+	ctx := context.Background()
+	client, closeConn, err := connect(ctx, env("BSVMS_ADDR", "bsvms:50051"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer closeConn()
+
+	ensureRegtestPeer(ctx, client)
+	rpc := nodeRPC{
+		url:      env("BSV_NODE_RPC_URL", "http://bsv-node:18443"),
+		username: env("BSV_NODE_RPC_USER", "bsv"),
+		password: env("BSV_NODE_RPC_PASSWORD", "bsv"),
+		client:   &http.Client{Timeout: 30 * time.Second},
+	}
+	if err := rpc.waitReady(ctx); err != nil {
+		log.Fatal(err)
+	}
+
+	wallets := []wallet{ensureWallet(ctx, client, playerWallet), ensureWallet(ctx, client, houseWallet)}
+	for _, w := range wallets {
+		if err := clearMissingUTXOs(ctx, client, rpc, w); err != nil {
+			log.Fatalf("check %s utxos: %v", w.id, err)
+		}
+	}
+
+	funded := map[string]string{}
+	var needed int64
+	for _, w := range wallets {
+		bal, err := client.Balance(ctx, &bsvmspb.BalanceRequest{TenantId: tenantID, WalletId: w.id})
+		if err != nil {
+			log.Fatalf("balance %s: %v", w.id, err)
+		}
+		if bal.GetSatoshis() < seedSatoshis {
+			needed += seedSatoshis - bal.GetSatoshis()
+		}
+	}
+	if needed > 0 {
+		if err := rpc.waitSpendable(ctx, needed); err != nil {
+			log.Fatalf("node funding balance: %v", err)
+		}
+	}
+	for _, w := range wallets {
+		bal, err := client.Balance(ctx, &bsvmspb.BalanceRequest{TenantId: tenantID, WalletId: w.id})
+		if err != nil {
+			log.Fatalf("balance %s: %v", w.id, err)
+		}
+		if bal.GetSatoshis() >= seedSatoshis {
+			continue
+		}
+		txid, err := rpc.sendToAddress(ctx, w.address, seedSatoshis-bal.GetSatoshis())
+		if err != nil {
+			log.Fatalf("fund %s: %v", w.id, err)
+		}
+		funded[w.id] = txid
+		fmt.Printf("funded %s wallet: %s\n", w.id, txid)
+	}
+	if len(funded) == 0 {
+		fmt.Println("blackjack wallets already funded")
+		return
+	}
+	if err := rpc.generate(ctx, 1); err != nil {
+		log.Fatalf("mine funding block: %v", err)
+	}
+	height, err := rpc.blockCount(ctx)
+	if err != nil {
+		log.Fatalf("funding block height: %v", err)
+	}
+	for _, w := range wallets {
+		txid, ok := funded[w.id]
+		if !ok {
+			continue
+		}
+		raw, err := rpc.rawTransaction(ctx, txid)
+		if err != nil {
+			log.Fatalf("funding tx %s: %v", txid, err)
+		}
+		if _, err := client.ProcessRawTx(ctx, &bsvmspb.ProcessRawTxRequest{TenantId: tenantID, WalletId: w.id, RawTx: raw, Height: int32(height)}); err != nil {
+			log.Fatalf("process funding tx for %s: %v", w.id, err)
+		}
+	}
+	fmt.Println("blackjack wallets funded from regtest coinbase")
+}
+
+func clearMissingUTXOs(ctx context.Context, client bsvmspb.BSVMSClient, rpc nodeRPC, w wallet) error {
+	utxos, err := client.ListUTXOs(ctx, &bsvmspb.ListUTXOsRequest{TenantId: tenantID, WalletId: w.id})
+	if err != nil {
+		return err
+	}
+	for _, utxo := range utxos.GetUtxos() {
+		ok, err := rpc.txOutExists(ctx, utxo.GetTxid(), utxo.GetVout())
+		if err != nil {
+			return err
+		}
+		if !ok {
+			cleared, err := client.ClearUTXOs(ctx, &bsvmspb.ClearUTXOsRequest{TenantId: tenantID, WalletId: w.id})
+			if err != nil {
+				return err
+			}
+			fmt.Printf("cleared %d off-chain %s utxos\n", cleared.GetCleared(), w.id)
+			return nil
+		}
+	}
+	return nil
+}
+
+type nodeRPC struct {
+	url      string
+	username string
+	password string
+	client   *http.Client
+}
+
+func (r nodeRPC) waitReady(ctx context.Context) error {
+	deadline := time.Now().Add(60 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		if _, err := r.blockCount(ctx); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+		time.Sleep(time.Second)
+	}
+	return fmt.Errorf("connect bsv-node RPC: %w", lastErr)
+}
+
+func (r nodeRPC) waitSpendable(ctx context.Context, sats int64) error {
+	deadline := time.Now().Add(60 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		balance, err := r.balanceSats(ctx)
+		if err == nil && balance >= sats {
+			return nil
+		}
+		if err != nil {
+			lastErr = err
+		} else {
+			lastErr = fmt.Errorf("spendable balance %d sats, need %d", balance, sats)
+		}
+		time.Sleep(time.Second)
+	}
+	return lastErr
+}
+
+func (r nodeRPC) balanceSats(ctx context.Context) (int64, error) {
+	var bsv float64
+	if err := r.call(ctx, "getbalance", nil, &bsv); err != nil {
+		return 0, err
+	}
+	return int64(bsv * 100_000_000), nil
+}
+
+func (r nodeRPC) blockCount(ctx context.Context) (int, error) {
+	var out int
+	return out, r.call(ctx, "getblockcount", nil, &out)
+}
+
+func (r nodeRPC) sendToAddress(ctx context.Context, address string, sats int64) (string, error) {
+	var txid string
+	return txid, r.call(ctx, "sendtoaddress", []any{address, float64(sats) / 100_000_000}, &txid)
+}
+
+func (r nodeRPC) generate(ctx context.Context, blocks int) error {
+	var hashes []string
+	return r.call(ctx, "generate", []any{blocks}, &hashes)
+}
+
+func (r nodeRPC) rawTransaction(ctx context.Context, txid string) ([]byte, error) {
+	var rawHex string
+	if err := r.call(ctx, "getrawtransaction", []any{txid}, &rawHex); err != nil {
+		return nil, err
+	}
+	return hex.DecodeString(rawHex)
+}
+
+func (r nodeRPC) txOutExists(ctx context.Context, txid string, vout uint32) (bool, error) {
+	var raw json.RawMessage
+	if err := r.call(ctx, "gettxout", []any{txid, vout, true}, &raw); err != nil {
+		return false, err
+	}
+	return string(raw) != "null", nil
+}
+
+func (r nodeRPC) call(ctx context.Context, method string, params []any, result any) error {
+	body, err := json.Marshal(map[string]any{"jsonrpc": "1.0", "id": "blackjack", "method": method, "params": params})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.url, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.SetBasicAuth(r.username, r.password)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := r.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("%s HTTP %d: %s", method, resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+	var envelope struct {
+		Result json.RawMessage `json:"result"`
+		Error  *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(respBody, &envelope); err != nil {
+		return err
+	}
+	if envelope.Error != nil {
+		return fmt.Errorf("%s RPC %d: %s", method, envelope.Error.Code, envelope.Error.Message)
+	}
+	if result == nil {
+		return nil
+	}
+	return json.Unmarshal(envelope.Result, result)
 }
 
 func outcome(playerTotal, houseTotal int) string {
@@ -262,11 +621,15 @@ func draw(deck *[]card) card {
 }
 
 func handString(hand []card) string {
+	return strings.Join(handStringParts(hand), " ")
+}
+
+func handStringParts(hand []card) []string {
 	parts := make([]string, len(hand))
 	for i, c := range hand {
 		parts[i] = c.String()
 	}
-	return strings.Join(parts, " ")
+	return parts
 }
 
 func handValue(hand []card) int {
@@ -289,11 +652,6 @@ func handValue(hand []card) int {
 		aces--
 	}
 	return total
-}
-
-func fakeTxID(walletID string, nonce int64) string {
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%s:%d", walletID, nonce)))
-	return hex.EncodeToString(sum[:])
 }
 
 func env(key, fallback string) string {
