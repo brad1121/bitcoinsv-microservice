@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"flag"
+	"fmt"
 	"log"
 	"net"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	bsv "github.com/brad1121/bitcoinsv-sdk-go/sdk"
 	bsvmspb "github.com/brad1121/bsvms/gen/bsvms/v1"
@@ -19,16 +21,24 @@ import (
 	"google.golang.org/grpc/reflection"
 )
 
+var version = "dev"
+
 func main() {
+	showVersion := flag.Bool("version", false, "print version and exit")
 	addr := flag.String("addr", env("BSVMS_ADDR", ":50051"), "gRPC listen address")
 	dataDir := flag.String("data-dir", env("BSVMS_DATA_DIR", "data"), "state directory")
 	networkName := flag.String("network", env("BSVMS_NETWORK", "mainnet"), "mainnet, testnet, stn, or regtest")
 	connect := flag.Bool("connect", envBool("BSVMS_CONNECT", true), "connect to BSV P2P network")
+	peers := flag.String("peers", env("BSVMS_PEERS", ""), "comma-separated peers to connect after startup")
 	authEnabled := flag.Bool("auth", envBool("BSVMS_AUTH", false), "require JWT auth")
 	enableCustomSpend := flag.Bool("enable-custom-spend", envBool("BSVMS_ENABLE_CUSTOM_SPEND", false), "enable BroadcastCustomSpend RPC")
 	jwtSecret := flag.String("jwt-secret", env("BSVMS_JWT_SECRET", ""), "JWT HS256 secret, raw or base64")
 	dataKey := flag.String("data-key", env("BSVMS_DATA_KEY", ""), "32-byte AES-GCM data key, raw or base64")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(version)
+		return
+	}
 
 	absDataDir, err := filepath.Abs(*dataDir)
 	if err != nil {
@@ -44,6 +54,11 @@ func main() {
 			log.Fatalf("connect BSV node: %v", err)
 		}
 		defer node.Disconnect()
+		for _, peer := range splitList(*peers) {
+			if err := connectPeerWithRetry(node, peer, 30*time.Second); err != nil {
+				log.Fatalf("connect peer %s: %v", peer, err)
+			}
+		}
 	}
 
 	svc, err := service.NewWithOptions(context.Background(), node, absDataDir, service.Options{
@@ -112,6 +127,34 @@ func secretBytes(value string) []byte {
 		return decoded
 	}
 	return []byte(value)
+}
+
+func splitList(value string) []string {
+	var out []string
+	for _, item := range strings.Split(value, ",") {
+		item = strings.TrimSpace(item)
+		if item != "" {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func connectPeerWithRetry(node *bsv.Node, peer string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		if err := node.ConnectPeer(peer); err != nil {
+			lastErr = err
+			time.Sleep(time.Second)
+			continue
+		}
+		return nil
+	}
+	if lastErr != nil {
+		return lastErr
+	}
+	return nil
 }
 
 func network(name string) bsv.NetworkType {

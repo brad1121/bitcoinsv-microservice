@@ -1,0 +1,57 @@
+services:
+  bsv-node:
+    image: ${BSV_NODE_IMAGE:-bitcoinsv/bitcoin-sv:latest}
+    command:
+      - bitcoind
+      - -regtest
+      - -server
+      - -listen=1
+      - -txindex=1
+      - -port=18444
+      - -bind=0.0.0.0:18444
+      - -rpcbind=0.0.0.0
+      - -rpcallowip=0.0.0.0/0
+      - -rpcuser=bsv
+      - -rpcpassword=bsv
+      - -minminingtxfee=0.00000001
+      - -printtoconsole
+    volumes:
+      - bsv-node-data:/home/bitcoin/.bitcoin
+    ports:
+      - "18444:18444"
+      - "18443:18443"
+
+  bsvms:
+    build:
+      context: .
+      additional_contexts:
+        sdk: ../bitcoinsv-sdk-go
+    command:
+      - -network=regtest
+      - -addr=:50051
+      - -connect=true
+      - -peers=bsv-node:18444
+      - -data-dir=/data
+    depends_on:
+      - bsv-node
+    volumes:
+      - bsvms-data:/data
+    ports:
+      - "50051:50051"
+
+  blackjack:
+    build:
+      context: .
+      additional_contexts:
+        sdk: ../bitcoinsv-sdk-go
+    entrypoint: ["/usr/local/bin/blackjack"]
+    environment:
+      BSVMS_ADDR: bsvms:50051
+    depends_on:
+      - bsvms
+    stdin_open: true
+    tty: true
+
+volumes:
+  bsv-node-data:
+  bsvms-data:

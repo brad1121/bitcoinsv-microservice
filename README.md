@@ -45,3 +45,34 @@ go run ./cmd/bsvms -enable-custom-spend
 ```
 
 API contract lives in [proto/bsvms/v1/bsvms.proto](proto/bsvms/v1/bsvms.proto).
+
+## Docker Compose Blackjack Demo
+
+Start regtest node, bsvms, and console blackjack:
+
+```sh
+docker compose run --rm blackjack
+```
+
+Compose services:
+
+- `bsv-node`: local BSV regtest P2P node on `18444`
+- `bsvms`: gRPC service on `50051`, connected to `bsv-node:18444`
+- `blackjack`: console game using bsvms wallets and settlement transactions
+
+If your BSV node image differs, override:
+
+```sh
+BSV_NODE_IMAGE=your/image:tag docker compose run --rm blackjack
+```
+
+## Releases
+
+Releases are published by GitHub Actions from semantic version tags:
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The release pipeline builds `bsvms` and `blackjack` for Linux, macOS, and Windows, then attaches archives to the GitHub release.

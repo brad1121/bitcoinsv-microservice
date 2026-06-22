@@ -1,0 +1,141 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Semantic version tag, for example v0.1.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.goos }}-${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            ext: ""
+            archive: tar.gz
+          - goos: linux
+            goarch: arm64
+            ext: ""
+            archive: tar.gz
+          - goos: darwin
+            goarch: amd64
+            ext: ""
+            archive: tar.gz
+          - goos: darwin
+            goarch: arm64
+            ext: ""
+            archive: tar.gz
+          - goos: windows
+            goarch: amd64
+            ext: ".exe"
+            archive: zip
+    steps:
+      - name: Resolve version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME}"
+          fi
+          if ! printf '%s' "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "version must match vMAJOR.MINOR.PATCH" >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout service
+        uses: actions/checkout@v4
+        with:
+          path: bsvms
+
+      - name: Checkout SDK
+        uses: actions/checkout@v4
+        with:
+          repository: brad1121/bitcoinsv-sdk-go
+          path: bitcoinsv-sdk-go
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.x"
+          cache-dependency-path: bsvms/go.sum
+
+      - name: Test
+        working-directory: bsvms
+        run: go test ./...
+
+      - name: Build
+        working-directory: bsvms
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mkdir -p dist/bin
+          go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o "dist/bin/bsvms${{ matrix.ext }}" ./cmd/bsvms
+          go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o "dist/bin/blackjack${{ matrix.ext }}" ./cmd/blackjack
+          cp README.md SECURITY_REVIEW.md proto/bsvms/v1/bsvms.proto dist/bin/
+
+      - name: Package tar
+        if: matrix.archive == 'tar.gz'
+        working-directory: bsvms/dist/bin
+        run: tar -czf "../bsvms-${{ steps.version.outputs.version }}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz" .
+
+      - name: Package zip
+        if: matrix.archive == 'zip'
+        working-directory: bsvms/dist/bin
+        run: zip -r "../bsvms-${{ steps.version.outputs.version }}-${{ matrix.goos }}-${{ matrix.goarch }}.zip" .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bsvms-${{ steps.version.outputs.version }}-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: bsvms/dist/bsvms-${{ steps.version.outputs.version }}-${{ matrix.goos }}-${{ matrix.goarch }}.*
+          if-no-files-found: error
+
+  publish:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME}"
+          fi
+          if ! printf '%s' "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "version must match vMAJOR.MINOR.PATCH" >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release create "$VERSION" release/* --target "$GITHUB_SHA" --title "$VERSION" --generate-notes
