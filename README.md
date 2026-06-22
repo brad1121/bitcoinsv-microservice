@@ -48,13 +48,19 @@ API contract lives in [proto/bsvms/v1/bsvms.proto](proto/bsvms/v1/bsvms.proto).
 
 ## Docker Compose Blackjack Demo
 
-Start regtest node, bsvms, and console blackjack:
+Start regtest node and bsvms:
+
+```sh
+docker compose up -d
+```
+
+Play blackjack in an interactive console:
 
 ```sh
 docker compose run --rm blackjack
 ```
 
-This pulls the public bsvms image from GHCR. No SDK checkout is required.
+The blackjack service is profile-gated, so plain `docker compose up` starts only the node and bsvms. `docker compose run` starts a one-shot interactive game container attached to your terminal. This pulls the public bsvms image from GHCR. No SDK checkout is required.
 
 Pin a release image:
 
