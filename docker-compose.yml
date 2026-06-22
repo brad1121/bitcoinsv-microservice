@@ -22,10 +22,7 @@ services:
       - "18443:18443"
 
   bsvms:
-    build:
-      context: .
-      additional_contexts:
-        sdk: ../bitcoinsv-sdk-go
+    image: ${BSVMS_IMAGE:-ghcr.io/brad1121/bitcoinsv-microservice:latest}
     command:
       - -network=regtest
       - -addr=:50051
@@ -40,10 +37,7 @@ services:
       - "50051:50051"
 
   blackjack:
-    build:
-      context: .
-      additional_contexts:
-        sdk: ../bitcoinsv-sdk-go
+    image: ${BSVMS_IMAGE:-ghcr.io/brad1121/bitcoinsv-microservice:latest}
     entrypoint: ["/usr/local/bin/blackjack"]
     environment:
       BSVMS_ADDR: bsvms:50051

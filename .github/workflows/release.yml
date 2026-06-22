@@ -13,6 +13,7 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
   build:
@@ -140,4 +141,65 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          gh release create "$VERSION" release/* --target "$GITHUB_SHA" --title "$VERSION" --generate-notes
+          gh release create "$VERSION" release/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$VERSION" --generate-notes
+
+  image:
+    name: Publish container image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME}"
+          fi
+          if ! printf '%s' "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "version must match vMAJOR.MINOR.PATCH" >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout service
+        uses: actions/checkout@v4
+        with:
+          path: bsvms
+
+      - name: Checkout SDK
+        uses: actions/checkout@v4
+        with:
+          repository: brad1121/bitcoinsv-sdk-go
+          path: bitcoinsv-sdk-go
+          ssh-key: ${{ secrets.BSV_SDK_DEPLOY_KEY }}
+          persist-credentials: false
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: bsvms
+          file: bsvms/Dockerfile
+          build-contexts: |
+            sdk=./bitcoinsv-sdk-go
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/brad1121/bitcoinsv-microservice:${{ steps.version.outputs.version }}
+            ghcr.io/brad1121/bitcoinsv-microservice:latest
+
+      - name: Make package public
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method PATCH /user/packages/container/bitcoinsv-microservice/visibility -f visibility=public

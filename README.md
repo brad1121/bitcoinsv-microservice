@@ -54,6 +54,14 @@ Start regtest node, bsvms, and console blackjack:
 docker compose run --rm blackjack
 ```
 
+This pulls the public bsvms image from GHCR. No SDK checkout is required.
+
+Pin a release image:
+
+```sh
+BSVMS_IMAGE=ghcr.io/brad1121/bitcoinsv-microservice:v0.1.0 docker compose run --rm blackjack
+```
+
 Compose services:
 
 - `bsv-node`: local BSV regtest P2P node on `18444`
@@ -76,6 +84,7 @@ git push origin v0.1.0
 ```
 
 The release pipeline builds `bsvms` and `blackjack` for Linux, macOS, and Windows, then attaches archives to the GitHub release.
+It also publishes the container image to `ghcr.io/brad1121/bitcoinsv-microservice` with both the semver tag and `latest`.
 
 Private SDK access:
 
