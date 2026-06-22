@@ -1,0 +1,8 @@
+.agents/
+.codex/
+.claude/
+data/
+*.key
+*.secret
+*.sqlite
+*.addrsnap
