@@ -76,3 +76,8 @@ git push origin v0.1.0
 ```
 
 The release pipeline builds `bsvms` and `blackjack` for Linux, macOS, and Windows, then attaches archives to the GitHub release.
+
+Private SDK access:
+
+- Add a read-only deploy key to `brad1121/bitcoinsv-sdk-go`.
+- Add the matching private key as this repository secret: `BSV_SDK_DEPLOY_KEY`.

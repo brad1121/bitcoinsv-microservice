@@ -67,6 +67,8 @@ jobs:
         with:
           repository: brad1121/bitcoinsv-sdk-go
           path: bitcoinsv-sdk-go
+          ssh-key: ${{ secrets.BSV_SDK_DEPLOY_KEY }}
+          persist-credentials: false
 
       - name: Setup Go
         uses: actions/setup-go@v5
