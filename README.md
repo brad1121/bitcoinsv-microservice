@@ -22,6 +22,7 @@ BSVMS_ADDR=:50051
 BSVMS_NETWORK=mainnet
 BSVMS_DATA_DIR=data
 BSVMS_CONNECT=true
+BSVMS_PEERS=
 BSVMS_AUTH=false
 BSVMS_ENABLE_CUSTOM_SPEND=false
 BSVMS_JWT_SECRET=
@@ -38,7 +39,7 @@ Optional JWT auth:
 go run ./cmd/bsvms -auth
 ```
 
-With auth on, first `CreateWallet` or `RestoreWallet` for a new `(tenant_id, wallet_id)` may be unauthenticated and returns `tokens`. After that, tenant wallet RPCs require `Authorization: Bearer <access_token>`. Use `RefreshToken` with `refresh_token` to rotate token pair. If `BSVMS_JWT_SECRET` is absent, bsvms creates `jwt.secret` with mode `0600`.
+With auth on, first `CreateWallet` or `RestoreWallet` for a new `(tenant_id, wallet_id)` may be unauthenticated and returns `tokens`. After that every RPC requires `Authorization: Bearer <access_token>` — node-scoped calls such as `Status` included — and tenant-scoped calls are additionally checked against the token's tenant and wallet. `RefreshToken` is the one exception, and rotates the token pair from `refresh_token`. If `BSVMS_JWT_SECRET` is absent, bsvms creates `jwt.secret` with mode `0600`.
 
 `BroadcastCustomSpend` is disabled by default. Enable only when you need caller-supplied custom script spends:
 
@@ -46,7 +47,7 @@ With auth on, first `CreateWallet` or `RestoreWallet` for a new `(tenant_id, wal
 go run ./cmd/bsvms -enable-custom-spend
 ```
 
-### Balances and coinbase maturity
+## Balances and coinbase maturity
 
 `Balance` returns `satoshis` (everything the wallet holds), `spendable`, and
 `immature`. A coinbase output counts towards `satoshis` from the moment it is
@@ -57,7 +58,7 @@ seen but cannot be spent until `coinbase_maturity` confirmations have passed
 from your own records without it puts an unspendable coin straight back into
 coin selection.
 
-### Reorgs
+## Reorgs
 
 `StreamBlocks` carries abandoned blocks as well as new ones. A message with
 `disconnected` set names a block the chain dropped in a reorganisation, emitted
@@ -65,7 +66,7 @@ deepest first before its replacement arrives; `txids` and `spends` are empty on
 those. Wallets have already demoted their transactions from that block to
 unconfirmed, and a consumer keeping its own mined index should do the same.
 
-### Delivery verification
+## Delivery verification
 
 A peer never announces a transaction back to whoever sent it, so a broadcast is
 only checkable when some connected peer was left out of it. Start with
@@ -79,7 +80,7 @@ broadcast transaction in memory until a block confirms it. Turn it on only if
 you persist and rebroadcast transactions yourself — `PendingTransactions` and
 `RebroadcastPendingTransactions` report nothing once it is off.
 
-### Stuck transactions
+## Stuck transactions
 
 `TxState` reports the store's view of a txid: `confirmed`, the `height` it
 confirmed at, and `conflicted` — meaning it can no longer confirm, because a
@@ -90,7 +91,7 @@ it. Use it for a transaction the chain will never rule on, such as one whose
 parent was never relayed — peers hold that as an orphan without ever sending a
 reject, so nothing else will clear it.
 
-### Rescan and crash recovery
+## Rescan and crash recovery
 
 `GetIncompleteCursor` reports a block the wallet started applying but never
 finished — how a crash mid-block shows up. Call it at startup; when it returns
@@ -113,7 +114,7 @@ grpcurl -plaintext -d '{"tenant_id":"t1","wallet_id":"w1","start_block_hash":"<h
   127.0.0.1:50051 bsvms.v1.BSVMS/Rescan
 ```
 
-### Authorization model
+## Authorization model
 
 With auth on, authorization is closed by default. A request carrying
 `tenant_id` is checked against the token's tenant and wallet; an empty
@@ -134,6 +135,8 @@ grpcurl -plaintext -import-path proto -proto bsvms/v1/bsvms.proto \
 ```
 
 API contract lives in [proto/bsvms/v1/bsvms.proto](proto/bsvms/v1/bsvms.proto).
+For app patterns and what the service provides, see
+[docs/building-apps.md](docs/building-apps.md).
 
 ## Docker Compose Blackjack Demo
 
