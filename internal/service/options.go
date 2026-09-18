@@ -16,6 +16,20 @@ type Options struct {
 	DataKey           []byte
 	AccessTTL         time.Duration
 	RefreshTTL        time.Duration
+
+	// BroadcastFanout caps how many peers each broadcast pushes to.
+	// 0 pushes to every connected peer. Set it to 1 to make delivery
+	// observable through WaitForTxRelay: a peer never announces a tx back
+	// to whoever sent it, so every peer broadcast to is disqualified as a
+	// witness.
+	BroadcastFanout int
+	// DisablePendingTxTracking stops the node holding every locally
+	// broadcast tx in memory until a block confirms it. Turn it on for
+	// high-volume deployments that persist and rebroadcast themselves —
+	// the ledger reaches millions of entries before the first block clears
+	// any of it. PendingTransactions and RebroadcastPendingTransactions
+	// report nothing once it is off.
+	DisablePendingTxTracking bool
 }
 
 func defaultOptions() Options {

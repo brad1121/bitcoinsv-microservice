@@ -65,8 +65,10 @@ type StatusResponse struct {
 	PeerCount      int32                  `protobuf:"varint,4,opt,name=peer_count,json=peerCount,proto3" json:"peer_count,omitempty"`
 	DataDir        string                 `protobuf:"bytes,5,opt,name=data_dir,json=dataDir,proto3" json:"data_dir,omitempty"`
 	PeerHeights    map[string]int32       `protobuf:"bytes,6,rep,name=peer_heights,json=peerHeights,proto3" json:"peer_heights,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Confirmations a coinbase output needs before it can be spent.
+	CoinbaseMaturity int32 `protobuf:"varint,7,opt,name=coinbase_maturity,json=coinbaseMaturity,proto3" json:"coinbase_maturity,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *StatusResponse) Reset() {
@@ -139,6 +141,13 @@ func (x *StatusResponse) GetPeerHeights() map[string]int32 {
 		return x.PeerHeights
 	}
 	return nil
+}
+
+func (x *StatusResponse) GetCoinbaseMaturity() int32 {
+	if x != nil {
+		return x.CoinbaseMaturity
+	}
+	return 0
 }
 
 type AuthTokens struct {
@@ -411,6 +420,10 @@ type Wallet struct {
 	NextExternalIndex uint32                 `protobuf:"varint,6,opt,name=next_external_index,json=nextExternalIndex,proto3" json:"next_external_index,omitempty"`
 	NextChangeIndex   uint32                 `protobuf:"varint,7,opt,name=next_change_index,json=nextChangeIndex,proto3" json:"next_change_index,omitempty"`
 	Selector          string                 `protobuf:"bytes,8,opt,name=selector,proto3" json:"selector,omitempty"`
+	// balance_satoshis counts immature coinbase; spendable_satoshis is what a
+	// send can draw on now. See BalanceResponse.
+	SpendableSatoshis int64 `protobuf:"varint,9,opt,name=spendable_satoshis,json=spendableSatoshis,proto3" json:"spendable_satoshis,omitempty"`
+	ImmatureSatoshis  int64 `protobuf:"varint,10,opt,name=immature_satoshis,json=immatureSatoshis,proto3" json:"immature_satoshis,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -499,6 +512,20 @@ func (x *Wallet) GetSelector() string {
 		return x.Selector
 	}
 	return ""
+}
+
+func (x *Wallet) GetSpendableSatoshis() int64 {
+	if x != nil {
+		return x.SpendableSatoshis
+	}
+	return 0
+}
+
+func (x *Wallet) GetImmatureSatoshis() int64 {
+	if x != nil {
+		return x.ImmatureSatoshis
+	}
+	return 0
 }
 
 type ListWalletsRequest struct {
@@ -1630,9 +1657,14 @@ func (x *BalanceRequest) GetWalletId() string {
 }
 
 type BalanceResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Satoshis      int64                  `protobuf:"varint,1,opt,name=satoshis,proto3" json:"satoshis,omitempty"`
-	Bsv           float64                `protobuf:"fixed64,2,opt,name=bsv,proto3" json:"bsv,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// satoshis is the total balance, immature coinbase included.
+	Satoshis int64   `protobuf:"varint,1,opt,name=satoshis,proto3" json:"satoshis,omitempty"`
+	Bsv      float64 `protobuf:"fixed64,2,opt,name=bsv,proto3" json:"bsv,omitempty"`
+	// spendable is satoshis minus immature; what a send can draw on now.
+	Spendable int64 `protobuf:"varint,3,opt,name=spendable,proto3" json:"spendable,omitempty"`
+	// immature sits in coinbase outputs younger than coinbase_maturity.
+	Immature      int64 `protobuf:"varint,4,opt,name=immature,proto3" json:"immature,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1681,13 +1713,30 @@ func (x *BalanceResponse) GetBsv() float64 {
 	return 0
 }
 
+func (x *BalanceResponse) GetSpendable() int64 {
+	if x != nil {
+		return x.Spendable
+	}
+	return 0
+}
+
+func (x *BalanceResponse) GetImmature() int64 {
+	if x != nil {
+		return x.Immature
+	}
+	return 0
+}
+
 type UTXO struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Txid          string                 `protobuf:"bytes,1,opt,name=txid,proto3" json:"txid,omitempty"`
-	Vout          uint32                 `protobuf:"varint,2,opt,name=vout,proto3" json:"vout,omitempty"`
-	Value         int64                  `protobuf:"varint,3,opt,name=value,proto3" json:"value,omitempty"`
-	Script        []byte                 `protobuf:"bytes,4,opt,name=script,proto3" json:"script,omitempty"`
-	Height        int32                  `protobuf:"varint,5,opt,name=height,proto3" json:"height,omitempty"`
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Txid   string                 `protobuf:"bytes,1,opt,name=txid,proto3" json:"txid,omitempty"`
+	Vout   uint32                 `protobuf:"varint,2,opt,name=vout,proto3" json:"vout,omitempty"`
+	Value  int64                  `protobuf:"varint,3,opt,name=value,proto3" json:"value,omitempty"`
+	Script []byte                 `protobuf:"bytes,4,opt,name=script,proto3" json:"script,omitempty"`
+	Height int32                  `protobuf:"varint,5,opt,name=height,proto3" json:"height,omitempty"`
+	// is_coinbase marks a mining reward: counted in balance but skipped by
+	// coin selection until coinbase_maturity confirmations have passed.
+	IsCoinbase    bool `protobuf:"varint,6,opt,name=is_coinbase,json=isCoinbase,proto3" json:"is_coinbase,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1755,6 +1804,13 @@ func (x *UTXO) GetHeight() int32 {
 		return x.Height
 	}
 	return 0
+}
+
+func (x *UTXO) GetIsCoinbase() bool {
+	if x != nil {
+		return x.IsCoinbase
+	}
+	return false
 }
 
 type ListUTXOsRequest struct {
@@ -1854,15 +1910,18 @@ func (x *ListUTXOsResponse) GetUtxos() []*UTXO {
 }
 
 type ImportUTXORequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	WalletId      string                 `protobuf:"bytes,2,opt,name=wallet_id,json=walletId,proto3" json:"wallet_id,omitempty"`
-	Txid          string                 `protobuf:"bytes,3,opt,name=txid,proto3" json:"txid,omitempty"`
-	Vout          uint32                 `protobuf:"varint,4,opt,name=vout,proto3" json:"vout,omitempty"`
-	Value         int64                  `protobuf:"varint,5,opt,name=value,proto3" json:"value,omitempty"`
-	Script        []byte                 `protobuf:"bytes,6,opt,name=script,proto3" json:"script,omitempty"`
-	Height        int32                  `protobuf:"varint,7,opt,name=height,proto3" json:"height,omitempty"`
-	Force         bool                   `protobuf:"varint,8,opt,name=force,proto3" json:"force,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	TenantId string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	WalletId string                 `protobuf:"bytes,2,opt,name=wallet_id,json=walletId,proto3" json:"wallet_id,omitempty"`
+	Txid     string                 `protobuf:"bytes,3,opt,name=txid,proto3" json:"txid,omitempty"`
+	Vout     uint32                 `protobuf:"varint,4,opt,name=vout,proto3" json:"vout,omitempty"`
+	Value    int64                  `protobuf:"varint,5,opt,name=value,proto3" json:"value,omitempty"`
+	Script   []byte                 `protobuf:"bytes,6,opt,name=script,proto3" json:"script,omitempty"`
+	Height   int32                  `protobuf:"varint,7,opt,name=height,proto3" json:"height,omitempty"`
+	Force    bool                   `protobuf:"varint,8,opt,name=force,proto3" json:"force,omitempty"`
+	// is_coinbase is honoured only with force; restoring a coinbase as an
+	// ordinary coin puts it back into coin selection before it is spendable.
+	IsCoinbase    bool `protobuf:"varint,9,opt,name=is_coinbase,json=isCoinbase,proto3" json:"is_coinbase,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1949,6 +2008,13 @@ func (x *ImportUTXORequest) GetHeight() int32 {
 func (x *ImportUTXORequest) GetForce() bool {
 	if x != nil {
 		return x.Force
+	}
+	return false
+}
+
+func (x *ImportUTXORequest) GetIsCoinbase() bool {
+	if x != nil {
+		return x.IsCoinbase
 	}
 	return false
 }
@@ -3157,19 +3223,74 @@ func (x *OutputSpec) GetValue() int64 {
 	return 0
 }
 
+type OutPoint struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Txid          string                 `protobuf:"bytes,1,opt,name=txid,proto3" json:"txid,omitempty"`
+	Vout          uint32                 `protobuf:"varint,2,opt,name=vout,proto3" json:"vout,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *OutPoint) Reset() {
+	*x = OutPoint{}
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[56]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *OutPoint) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*OutPoint) ProtoMessage() {}
+
+func (x *OutPoint) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[56]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use OutPoint.ProtoReflect.Descriptor instead.
+func (*OutPoint) Descriptor() ([]byte, []int) {
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{56}
+}
+
+func (x *OutPoint) GetTxid() string {
+	if x != nil {
+		return x.Txid
+	}
+	return ""
+}
+
+func (x *OutPoint) GetVout() uint32 {
+	if x != nil {
+		return x.Vout
+	}
+	return 0
+}
+
 type SpendToOutputsRequest struct {
 	state              protoimpl.MessageState `protogen:"open.v1"`
 	TenantId           string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
 	WalletId           string                 `protobuf:"bytes,2,opt,name=wallet_id,json=walletId,proto3" json:"wallet_id,omitempty"`
 	Outputs            []*OutputSpec          `protobuf:"bytes,3,rep,name=outputs,proto3" json:"outputs,omitempty"`
 	IgnoreFixedOutputs bool                   `protobuf:"varint,4,opt,name=ignore_fixed_outputs,json=ignoreFixedOutputs,proto3" json:"ignore_fixed_outputs,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// from_inputs restricts coin selection to these outpoints (plus change).
+	// Mutually exclusive with ignore_fixed_outputs.
+	FromInputs    []*OutPoint `protobuf:"bytes,5,rep,name=from_inputs,json=fromInputs,proto3" json:"from_inputs,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SpendToOutputsRequest) Reset() {
 	*x = SpendToOutputsRequest{}
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[56]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3181,7 +3302,7 @@ func (x *SpendToOutputsRequest) String() string {
 func (*SpendToOutputsRequest) ProtoMessage() {}
 
 func (x *SpendToOutputsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[56]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3194,7 +3315,7 @@ func (x *SpendToOutputsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SpendToOutputsRequest.ProtoReflect.Descriptor instead.
 func (*SpendToOutputsRequest) Descriptor() ([]byte, []int) {
-	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{56}
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *SpendToOutputsRequest) GetTenantId() string {
@@ -3225,6 +3346,13 @@ func (x *SpendToOutputsRequest) GetIgnoreFixedOutputs() bool {
 	return false
 }
 
+func (x *SpendToOutputsRequest) GetFromInputs() []*OutPoint {
+	if x != nil {
+		return x.FromInputs
+	}
+	return nil
+}
+
 type SpendDetail struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Txid          string                 `protobuf:"bytes,1,opt,name=txid,proto3" json:"txid,omitempty"`
@@ -3237,7 +3365,7 @@ type SpendDetail struct {
 
 func (x *SpendDetail) Reset() {
 	*x = SpendDetail{}
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[57]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3249,7 +3377,7 @@ func (x *SpendDetail) String() string {
 func (*SpendDetail) ProtoMessage() {}
 
 func (x *SpendDetail) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[57]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3262,7 +3390,7 @@ func (x *SpendDetail) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SpendDetail.ProtoReflect.Descriptor instead.
 func (*SpendDetail) Descriptor() ([]byte, []int) {
-	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{57}
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *SpendDetail) GetTxid() string {
@@ -3302,7 +3430,7 @@ type SpendDetailResponse struct {
 
 func (x *SpendDetailResponse) Reset() {
 	*x = SpendDetailResponse{}
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[58]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3314,7 +3442,7 @@ func (x *SpendDetailResponse) String() string {
 func (*SpendDetailResponse) ProtoMessage() {}
 
 func (x *SpendDetailResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[58]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3327,7 +3455,7 @@ func (x *SpendDetailResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SpendDetailResponse.ProtoReflect.Descriptor instead.
 func (*SpendDetailResponse) Descriptor() ([]byte, []int) {
-	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{58}
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *SpendDetailResponse) GetDetail() *SpendDetail {
@@ -3349,7 +3477,7 @@ type CustomInput struct {
 
 func (x *CustomInput) Reset() {
 	*x = CustomInput{}
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[59]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[60]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3361,7 +3489,7 @@ func (x *CustomInput) String() string {
 func (*CustomInput) ProtoMessage() {}
 
 func (x *CustomInput) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[59]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[60]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3374,7 +3502,7 @@ func (x *CustomInput) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CustomInput.ProtoReflect.Descriptor instead.
 func (*CustomInput) Descriptor() ([]byte, []int) {
-	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{59}
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{60}
 }
 
 func (x *CustomInput) GetTxid() string {
@@ -3415,7 +3543,7 @@ type BroadcastCustomSpendRequest struct {
 
 func (x *BroadcastCustomSpendRequest) Reset() {
 	*x = BroadcastCustomSpendRequest{}
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[60]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3427,7 +3555,7 @@ func (x *BroadcastCustomSpendRequest) String() string {
 func (*BroadcastCustomSpendRequest) ProtoMessage() {}
 
 func (x *BroadcastCustomSpendRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[60]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3440,7 +3568,7 @@ func (x *BroadcastCustomSpendRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BroadcastCustomSpendRequest.ProtoReflect.Descriptor instead.
 func (*BroadcastCustomSpendRequest) Descriptor() ([]byte, []int) {
-	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{60}
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{61}
 }
 
 func (x *BroadcastCustomSpendRequest) GetInputs() []*CustomInput {
@@ -3467,7 +3595,7 @@ type P2PKHOutputRequest struct {
 
 func (x *P2PKHOutputRequest) Reset() {
 	*x = P2PKHOutputRequest{}
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[61]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3479,7 +3607,7 @@ func (x *P2PKHOutputRequest) String() string {
 func (*P2PKHOutputRequest) ProtoMessage() {}
 
 func (x *P2PKHOutputRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[61]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3492,7 +3620,7 @@ func (x *P2PKHOutputRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use P2PKHOutputRequest.ProtoReflect.Descriptor instead.
 func (*P2PKHOutputRequest) Descriptor() ([]byte, []int) {
-	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{61}
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *P2PKHOutputRequest) GetAddress() string {
@@ -3518,7 +3646,7 @@ type OpReturnOutputRequest struct {
 
 func (x *OpReturnOutputRequest) Reset() {
 	*x = OpReturnOutputRequest{}
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[62]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3530,7 +3658,7 @@ func (x *OpReturnOutputRequest) String() string {
 func (*OpReturnOutputRequest) ProtoMessage() {}
 
 func (x *OpReturnOutputRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[62]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3543,7 +3671,7 @@ func (x *OpReturnOutputRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OpReturnOutputRequest.ProtoReflect.Descriptor instead.
 func (*OpReturnOutputRequest) Descriptor() ([]byte, []int) {
-	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{62}
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{63}
 }
 
 func (x *OpReturnOutputRequest) GetData() []byte {
@@ -3562,7 +3690,7 @@ type AnyoneCanSpendOutputRequest struct {
 
 func (x *AnyoneCanSpendOutputRequest) Reset() {
 	*x = AnyoneCanSpendOutputRequest{}
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[63]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3574,7 +3702,7 @@ func (x *AnyoneCanSpendOutputRequest) String() string {
 func (*AnyoneCanSpendOutputRequest) ProtoMessage() {}
 
 func (x *AnyoneCanSpendOutputRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[63]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3587,7 +3715,7 @@ func (x *AnyoneCanSpendOutputRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AnyoneCanSpendOutputRequest.ProtoReflect.Descriptor instead.
 func (*AnyoneCanSpendOutputRequest) Descriptor() ([]byte, []int) {
-	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{63}
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{64}
 }
 
 func (x *AnyoneCanSpendOutputRequest) GetValue() int64 {
@@ -3606,7 +3734,7 @@ type ParseTransactionRequest struct {
 
 func (x *ParseTransactionRequest) Reset() {
 	*x = ParseTransactionRequest{}
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[64]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3618,7 +3746,7 @@ func (x *ParseTransactionRequest) String() string {
 func (*ParseTransactionRequest) ProtoMessage() {}
 
 func (x *ParseTransactionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[64]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3631,7 +3759,7 @@ func (x *ParseTransactionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ParseTransactionRequest.ProtoReflect.Descriptor instead.
 func (*ParseTransactionRequest) Descriptor() ([]byte, []int) {
-	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{64}
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{65}
 }
 
 func (x *ParseTransactionRequest) GetRawTx() []byte {
@@ -3653,7 +3781,7 @@ type Transaction struct {
 
 func (x *Transaction) Reset() {
 	*x = Transaction{}
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[65]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[66]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3665,7 +3793,7 @@ func (x *Transaction) String() string {
 func (*Transaction) ProtoMessage() {}
 
 func (x *Transaction) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[65]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[66]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3678,7 +3806,7 @@ func (x *Transaction) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Transaction.ProtoReflect.Descriptor instead.
 func (*Transaction) Descriptor() ([]byte, []int) {
-	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{65}
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{66}
 }
 
 func (x *Transaction) GetTxid() string {
@@ -3722,7 +3850,7 @@ type TxInput struct {
 
 func (x *TxInput) Reset() {
 	*x = TxInput{}
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[66]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[67]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3734,7 +3862,7 @@ func (x *TxInput) String() string {
 func (*TxInput) ProtoMessage() {}
 
 func (x *TxInput) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[66]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[67]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3747,7 +3875,7 @@ func (x *TxInput) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TxInput.ProtoReflect.Descriptor instead.
 func (*TxInput) Descriptor() ([]byte, []int) {
-	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{66}
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{67}
 }
 
 func (x *TxInput) GetPrevTxid() string {
@@ -3797,7 +3925,7 @@ type TxOutput struct {
 
 func (x *TxOutput) Reset() {
 	*x = TxOutput{}
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[67]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[68]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3809,7 +3937,7 @@ func (x *TxOutput) String() string {
 func (*TxOutput) ProtoMessage() {}
 
 func (x *TxOutput) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[67]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[68]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3822,7 +3950,7 @@ func (x *TxOutput) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TxOutput.ProtoReflect.Descriptor instead.
 func (*TxOutput) Descriptor() ([]byte, []int) {
-	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{67}
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{68}
 }
 
 func (x *TxOutput) GetVout() uint32 {
@@ -3862,7 +3990,7 @@ type BroadcastRawRequest struct {
 
 func (x *BroadcastRawRequest) Reset() {
 	*x = BroadcastRawRequest{}
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[68]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[69]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3874,7 +4002,7 @@ func (x *BroadcastRawRequest) String() string {
 func (*BroadcastRawRequest) ProtoMessage() {}
 
 func (x *BroadcastRawRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[68]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[69]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3887,7 +4015,7 @@ func (x *BroadcastRawRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BroadcastRawRequest.ProtoReflect.Descriptor instead.
 func (*BroadcastRawRequest) Descriptor() ([]byte, []int) {
-	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{68}
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{69}
 }
 
 func (x *BroadcastRawRequest) GetRawTx() []byte {
@@ -3906,7 +4034,7 @@ type BroadcastRawResponse struct {
 
 func (x *BroadcastRawResponse) Reset() {
 	*x = BroadcastRawResponse{}
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[69]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[70]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3918,7 +4046,7 @@ func (x *BroadcastRawResponse) String() string {
 func (*BroadcastRawResponse) ProtoMessage() {}
 
 func (x *BroadcastRawResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[69]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[70]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3931,7 +4059,7 @@ func (x *BroadcastRawResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BroadcastRawResponse.ProtoReflect.Descriptor instead.
 func (*BroadcastRawResponse) Descriptor() ([]byte, []int) {
-	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{69}
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{70}
 }
 
 func (x *BroadcastRawResponse) GetTxid() string {
@@ -3942,19 +4070,22 @@ func (x *BroadcastRawResponse) GetTxid() string {
 }
 
 type ExecuteScriptRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ScriptSig     []byte                 `protobuf:"bytes,1,opt,name=script_sig,json=scriptSig,proto3" json:"script_sig,omitempty"`
-	ScriptPubKey  []byte                 `protobuf:"bytes,2,opt,name=script_pub_key,json=scriptPubKey,proto3" json:"script_pub_key,omitempty"`
-	RawTx         []byte                 `protobuf:"bytes,3,opt,name=raw_tx,json=rawTx,proto3" json:"raw_tx,omitempty"`
-	InputIndex    int32                  `protobuf:"varint,4,opt,name=input_index,json=inputIndex,proto3" json:"input_index,omitempty"`
-	Amount        int64                  `protobuf:"varint,5,opt,name=amount,proto3" json:"amount,omitempty"`
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	ScriptSig    []byte                 `protobuf:"bytes,1,opt,name=script_sig,json=scriptSig,proto3" json:"script_sig,omitempty"`
+	ScriptPubKey []byte                 `protobuf:"bytes,2,opt,name=script_pub_key,json=scriptPubKey,proto3" json:"script_pub_key,omitempty"`
+	RawTx        []byte                 `protobuf:"bytes,3,opt,name=raw_tx,json=rawTx,proto3" json:"raw_tx,omitempty"`
+	InputIndex   int32                  `protobuf:"varint,4,opt,name=input_index,json=inputIndex,proto3" json:"input_index,omitempty"`
+	Amount       int64                  `protobuf:"varint,5,opt,name=amount,proto3" json:"amount,omitempty"`
+	// strict also applies the standard relay flags: a script that passes
+	// without it but fails with it is consensus-valid yet non-standard.
+	Strict        bool `protobuf:"varint,6,opt,name=strict,proto3" json:"strict,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ExecuteScriptRequest) Reset() {
 	*x = ExecuteScriptRequest{}
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[70]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[71]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3966,7 +4097,7 @@ func (x *ExecuteScriptRequest) String() string {
 func (*ExecuteScriptRequest) ProtoMessage() {}
 
 func (x *ExecuteScriptRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[70]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[71]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3979,7 +4110,7 @@ func (x *ExecuteScriptRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecuteScriptRequest.ProtoReflect.Descriptor instead.
 func (*ExecuteScriptRequest) Descriptor() ([]byte, []int) {
-	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{70}
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{71}
 }
 
 func (x *ExecuteScriptRequest) GetScriptSig() []byte {
@@ -4017,6 +4148,13 @@ func (x *ExecuteScriptRequest) GetAmount() int64 {
 	return 0
 }
 
+func (x *ExecuteScriptRequest) GetStrict() bool {
+	if x != nil {
+		return x.Strict
+	}
+	return false
+}
+
 type ExecuteScriptResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Ok            bool                   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
@@ -4027,7 +4165,7 @@ type ExecuteScriptResponse struct {
 
 func (x *ExecuteScriptResponse) Reset() {
 	*x = ExecuteScriptResponse{}
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[71]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[72]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4039,7 +4177,7 @@ func (x *ExecuteScriptResponse) String() string {
 func (*ExecuteScriptResponse) ProtoMessage() {}
 
 func (x *ExecuteScriptResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[71]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[72]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4052,7 +4190,7 @@ func (x *ExecuteScriptResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecuteScriptResponse.ProtoReflect.Descriptor instead.
 func (*ExecuteScriptResponse) Descriptor() ([]byte, []int) {
-	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{71}
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{72}
 }
 
 func (x *ExecuteScriptResponse) GetOk() bool {
@@ -4078,7 +4216,7 @@ type DecodeOutputAddressRequest struct {
 
 func (x *DecodeOutputAddressRequest) Reset() {
 	*x = DecodeOutputAddressRequest{}
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[72]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[73]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4090,7 +4228,7 @@ func (x *DecodeOutputAddressRequest) String() string {
 func (*DecodeOutputAddressRequest) ProtoMessage() {}
 
 func (x *DecodeOutputAddressRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[72]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[73]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4103,7 +4241,7 @@ func (x *DecodeOutputAddressRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DecodeOutputAddressRequest.ProtoReflect.Descriptor instead.
 func (*DecodeOutputAddressRequest) Descriptor() ([]byte, []int) {
-	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{72}
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{73}
 }
 
 func (x *DecodeOutputAddressRequest) GetScriptPubKey() []byte {
@@ -4123,7 +4261,7 @@ type DecodeOutputAddressResponse struct {
 
 func (x *DecodeOutputAddressResponse) Reset() {
 	*x = DecodeOutputAddressResponse{}
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[73]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[74]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4135,7 +4273,7 @@ func (x *DecodeOutputAddressResponse) String() string {
 func (*DecodeOutputAddressResponse) ProtoMessage() {}
 
 func (x *DecodeOutputAddressResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[73]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[74]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4148,7 +4286,7 @@ func (x *DecodeOutputAddressResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DecodeOutputAddressResponse.ProtoReflect.Descriptor instead.
 func (*DecodeOutputAddressResponse) Descriptor() ([]byte, []int) {
-	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{73}
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{74}
 }
 
 func (x *DecodeOutputAddressResponse) GetAddress() string {
@@ -4173,7 +4311,7 @@ type PendingTransactionsRequest struct {
 
 func (x *PendingTransactionsRequest) Reset() {
 	*x = PendingTransactionsRequest{}
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[74]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[75]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4185,7 +4323,7 @@ func (x *PendingTransactionsRequest) String() string {
 func (*PendingTransactionsRequest) ProtoMessage() {}
 
 func (x *PendingTransactionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[74]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[75]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4198,7 +4336,7 @@ func (x *PendingTransactionsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PendingTransactionsRequest.ProtoReflect.Descriptor instead.
 func (*PendingTransactionsRequest) Descriptor() ([]byte, []int) {
-	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{74}
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{75}
 }
 
 type PendingTransaction struct {
@@ -4214,7 +4352,7 @@ type PendingTransaction struct {
 
 func (x *PendingTransaction) Reset() {
 	*x = PendingTransaction{}
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[75]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[76]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4226,7 +4364,7 @@ func (x *PendingTransaction) String() string {
 func (*PendingTransaction) ProtoMessage() {}
 
 func (x *PendingTransaction) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[75]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[76]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4239,7 +4377,7 @@ func (x *PendingTransaction) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PendingTransaction.ProtoReflect.Descriptor instead.
 func (*PendingTransaction) Descriptor() ([]byte, []int) {
-	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{75}
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{76}
 }
 
 func (x *PendingTransaction) GetTxid() string {
@@ -4286,7 +4424,7 @@ type PendingTransactionsResponse struct {
 
 func (x *PendingTransactionsResponse) Reset() {
 	*x = PendingTransactionsResponse{}
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[76]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[77]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4298,7 +4436,7 @@ func (x *PendingTransactionsResponse) String() string {
 func (*PendingTransactionsResponse) ProtoMessage() {}
 
 func (x *PendingTransactionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[76]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[77]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4311,7 +4449,7 @@ func (x *PendingTransactionsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PendingTransactionsResponse.ProtoReflect.Descriptor instead.
 func (*PendingTransactionsResponse) Descriptor() ([]byte, []int) {
-	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{76}
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{77}
 }
 
 func (x *PendingTransactionsResponse) GetTransactions() []*PendingTransaction {
@@ -4329,7 +4467,7 @@ type RebroadcastPendingTransactionsRequest struct {
 
 func (x *RebroadcastPendingTransactionsRequest) Reset() {
 	*x = RebroadcastPendingTransactionsRequest{}
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[77]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[78]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4341,7 +4479,7 @@ func (x *RebroadcastPendingTransactionsRequest) String() string {
 func (*RebroadcastPendingTransactionsRequest) ProtoMessage() {}
 
 func (x *RebroadcastPendingTransactionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[77]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[78]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4354,7 +4492,7 @@ func (x *RebroadcastPendingTransactionsRequest) ProtoReflect() protoreflect.Mess
 
 // Deprecated: Use RebroadcastPendingTransactionsRequest.ProtoReflect.Descriptor instead.
 func (*RebroadcastPendingTransactionsRequest) Descriptor() ([]byte, []int) {
-	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{77}
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{78}
 }
 
 type RebroadcastPendingTransactionsResponse struct {
@@ -4366,7 +4504,7 @@ type RebroadcastPendingTransactionsResponse struct {
 
 func (x *RebroadcastPendingTransactionsResponse) Reset() {
 	*x = RebroadcastPendingTransactionsResponse{}
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[78]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[79]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4378,7 +4516,7 @@ func (x *RebroadcastPendingTransactionsResponse) String() string {
 func (*RebroadcastPendingTransactionsResponse) ProtoMessage() {}
 
 func (x *RebroadcastPendingTransactionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[78]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[79]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4391,7 +4529,7 @@ func (x *RebroadcastPendingTransactionsResponse) ProtoReflect() protoreflect.Mes
 
 // Deprecated: Use RebroadcastPendingTransactionsResponse.ProtoReflect.Descriptor instead.
 func (*RebroadcastPendingTransactionsResponse) Descriptor() ([]byte, []int) {
-	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{78}
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{79}
 }
 
 func (x *RebroadcastPendingTransactionsResponse) GetCount() int32 {
@@ -4409,7 +4547,7 @@ type StreamTransactionsRequest struct {
 
 func (x *StreamTransactionsRequest) Reset() {
 	*x = StreamTransactionsRequest{}
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[79]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[80]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4421,7 +4559,7 @@ func (x *StreamTransactionsRequest) String() string {
 func (*StreamTransactionsRequest) ProtoMessage() {}
 
 func (x *StreamTransactionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[79]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[80]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4434,22 +4572,27 @@ func (x *StreamTransactionsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamTransactionsRequest.ProtoReflect.Descriptor instead.
 func (*StreamTransactionsRequest) Descriptor() ([]byte, []int) {
-	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{79}
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{80}
 }
 
 type Block struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Hash          string                 `protobuf:"bytes,1,opt,name=hash,proto3" json:"hash,omitempty"`
-	Height        int32                  `protobuf:"varint,2,opt,name=height,proto3" json:"height,omitempty"`
-	Txids         []string               `protobuf:"bytes,3,rep,name=txids,proto3" json:"txids,omitempty"`
-	Spends        []*BlockSpend          `protobuf:"bytes,4,rep,name=spends,proto3" json:"spends,omitempty"`
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Hash   string                 `protobuf:"bytes,1,opt,name=hash,proto3" json:"hash,omitempty"`
+	Height int32                  `protobuf:"varint,2,opt,name=height,proto3" json:"height,omitempty"`
+	Txids  []string               `protobuf:"bytes,3,rep,name=txids,proto3" json:"txids,omitempty"`
+	Spends []*BlockSpend          `protobuf:"bytes,4,rep,name=spends,proto3" json:"spends,omitempty"`
+	// disconnected marks a block the chain abandoned in a reorganisation,
+	// emitted deepest first before its replacement is applied. txids and
+	// spends are empty on these; consumers keeping their own mined index
+	// should drop the block at this hash.
+	Disconnected  bool `protobuf:"varint,5,opt,name=disconnected,proto3" json:"disconnected,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Block) Reset() {
 	*x = Block{}
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[80]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[81]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4461,7 +4604,7 @@ func (x *Block) String() string {
 func (*Block) ProtoMessage() {}
 
 func (x *Block) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[80]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[81]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4474,7 +4617,7 @@ func (x *Block) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Block.ProtoReflect.Descriptor instead.
 func (*Block) Descriptor() ([]byte, []int) {
-	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{80}
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{81}
 }
 
 func (x *Block) GetHash() string {
@@ -4505,6 +4648,13 @@ func (x *Block) GetSpends() []*BlockSpend {
 	return nil
 }
 
+func (x *Block) GetDisconnected() bool {
+	if x != nil {
+		return x.Disconnected
+	}
+	return false
+}
+
 type BlockSpend struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	PrevTxid      string                 `protobuf:"bytes,1,opt,name=prev_txid,json=prevTxid,proto3" json:"prev_txid,omitempty"`
@@ -4516,7 +4666,7 @@ type BlockSpend struct {
 
 func (x *BlockSpend) Reset() {
 	*x = BlockSpend{}
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[81]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[82]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4528,7 +4678,7 @@ func (x *BlockSpend) String() string {
 func (*BlockSpend) ProtoMessage() {}
 
 func (x *BlockSpend) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[81]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[82]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4541,7 +4691,7 @@ func (x *BlockSpend) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BlockSpend.ProtoReflect.Descriptor instead.
 func (*BlockSpend) Descriptor() ([]byte, []int) {
-	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{81}
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{82}
 }
 
 func (x *BlockSpend) GetPrevTxid() string {
@@ -4573,7 +4723,7 @@ type StreamBlocksRequest struct {
 
 func (x *StreamBlocksRequest) Reset() {
 	*x = StreamBlocksRequest{}
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[82]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[83]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4585,7 +4735,7 @@ func (x *StreamBlocksRequest) String() string {
 func (*StreamBlocksRequest) ProtoMessage() {}
 
 func (x *StreamBlocksRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[82]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[83]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4598,7 +4748,7 @@ func (x *StreamBlocksRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamBlocksRequest.ProtoReflect.Descriptor instead.
 func (*StreamBlocksRequest) Descriptor() ([]byte, []int) {
-	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{82}
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{83}
 }
 
 type Payment struct {
@@ -4616,7 +4766,7 @@ type Payment struct {
 
 func (x *Payment) Reset() {
 	*x = Payment{}
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[83]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[84]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4628,7 +4778,7 @@ func (x *Payment) String() string {
 func (*Payment) ProtoMessage() {}
 
 func (x *Payment) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[83]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[84]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4641,7 +4791,7 @@ func (x *Payment) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Payment.ProtoReflect.Descriptor instead.
 func (*Payment) Descriptor() ([]byte, []int) {
-	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{83}
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{84}
 }
 
 func (x *Payment) GetTenantId() string {
@@ -4703,7 +4853,7 @@ type StreamPaymentsRequest struct {
 
 func (x *StreamPaymentsRequest) Reset() {
 	*x = StreamPaymentsRequest{}
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[84]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[85]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4715,7 +4865,7 @@ func (x *StreamPaymentsRequest) String() string {
 func (*StreamPaymentsRequest) ProtoMessage() {}
 
 func (x *StreamPaymentsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[84]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[85]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4728,7 +4878,7 @@ func (x *StreamPaymentsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamPaymentsRequest.ProtoReflect.Descriptor instead.
 func (*StreamPaymentsRequest) Descriptor() ([]byte, []int) {
-	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{84}
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{85}
 }
 
 func (x *StreamPaymentsRequest) GetTenantId() string {
@@ -4757,7 +4907,7 @@ type OwnedOutput struct {
 
 func (x *OwnedOutput) Reset() {
 	*x = OwnedOutput{}
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[85]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[86]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4769,7 +4919,7 @@ func (x *OwnedOutput) String() string {
 func (*OwnedOutput) ProtoMessage() {}
 
 func (x *OwnedOutput) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[85]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[86]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4782,7 +4932,7 @@ func (x *OwnedOutput) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OwnedOutput.ProtoReflect.Descriptor instead.
 func (*OwnedOutput) Descriptor() ([]byte, []int) {
-	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{85}
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{86}
 }
 
 func (x *OwnedOutput) GetVout() uint32 {
@@ -4823,7 +4973,7 @@ type SpentOutPoint struct {
 
 func (x *SpentOutPoint) Reset() {
 	*x = SpentOutPoint{}
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[86]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[87]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4835,7 +4985,7 @@ func (x *SpentOutPoint) String() string {
 func (*SpentOutPoint) ProtoMessage() {}
 
 func (x *SpentOutPoint) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[86]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[87]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4848,7 +4998,7 @@ func (x *SpentOutPoint) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SpentOutPoint.ProtoReflect.Descriptor instead.
 func (*SpentOutPoint) Descriptor() ([]byte, []int) {
-	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{86}
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{87}
 }
 
 func (x *SpentOutPoint) GetTxid() string {
@@ -4878,7 +5028,7 @@ type WalletTransaction struct {
 
 func (x *WalletTransaction) Reset() {
 	*x = WalletTransaction{}
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[87]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[88]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4890,7 +5040,7 @@ func (x *WalletTransaction) String() string {
 func (*WalletTransaction) ProtoMessage() {}
 
 func (x *WalletTransaction) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[87]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[88]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4903,7 +5053,7 @@ func (x *WalletTransaction) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WalletTransaction.ProtoReflect.Descriptor instead.
 func (*WalletTransaction) Descriptor() ([]byte, []int) {
-	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{87}
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{88}
 }
 
 func (x *WalletTransaction) GetTenantId() string {
@@ -4951,7 +5101,7 @@ type StreamWalletTransactionsRequest struct {
 
 func (x *StreamWalletTransactionsRequest) Reset() {
 	*x = StreamWalletTransactionsRequest{}
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[88]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[89]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4963,7 +5113,7 @@ func (x *StreamWalletTransactionsRequest) String() string {
 func (*StreamWalletTransactionsRequest) ProtoMessage() {}
 
 func (x *StreamWalletTransactionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[88]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[89]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4976,7 +5126,7 @@ func (x *StreamWalletTransactionsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamWalletTransactionsRequest.ProtoReflect.Descriptor instead.
 func (*StreamWalletTransactionsRequest) Descriptor() ([]byte, []int) {
-	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{88}
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{89}
 }
 
 func (x *StreamWalletTransactionsRequest) GetTenantId() string {
@@ -5006,7 +5156,7 @@ type P2PTraffic struct {
 
 func (x *P2PTraffic) Reset() {
 	*x = P2PTraffic{}
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[89]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[90]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5018,7 +5168,7 @@ func (x *P2PTraffic) String() string {
 func (*P2PTraffic) ProtoMessage() {}
 
 func (x *P2PTraffic) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[89]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[90]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5031,7 +5181,7 @@ func (x *P2PTraffic) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use P2PTraffic.ProtoReflect.Descriptor instead.
 func (*P2PTraffic) Descriptor() ([]byte, []int) {
-	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{89}
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{90}
 }
 
 func (x *P2PTraffic) GetPeer() string {
@@ -5077,7 +5227,7 @@ type StreamP2PTrafficRequest struct {
 
 func (x *StreamP2PTrafficRequest) Reset() {
 	*x = StreamP2PTrafficRequest{}
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[90]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[91]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5089,7 +5239,7 @@ func (x *StreamP2PTrafficRequest) String() string {
 func (*StreamP2PTrafficRequest) ProtoMessage() {}
 
 func (x *StreamP2PTrafficRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[90]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[91]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5102,7 +5252,7 @@ func (x *StreamP2PTrafficRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamP2PTrafficRequest.ProtoReflect.Descriptor instead.
 func (*StreamP2PTrafficRequest) Descriptor() ([]byte, []int) {
-	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{90}
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{91}
 }
 
 type Reject struct {
@@ -5119,7 +5269,7 @@ type Reject struct {
 
 func (x *Reject) Reset() {
 	*x = Reject{}
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[91]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[92]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5131,7 +5281,7 @@ func (x *Reject) String() string {
 func (*Reject) ProtoMessage() {}
 
 func (x *Reject) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[91]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[92]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5144,7 +5294,7 @@ func (x *Reject) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Reject.ProtoReflect.Descriptor instead.
 func (*Reject) Descriptor() ([]byte, []int) {
-	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{91}
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{92}
 }
 
 func (x *Reject) GetPeer() string {
@@ -5197,7 +5347,7 @@ type StreamRejectsRequest struct {
 
 func (x *StreamRejectsRequest) Reset() {
 	*x = StreamRejectsRequest{}
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[92]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[93]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5209,7 +5359,7 @@ func (x *StreamRejectsRequest) String() string {
 func (*StreamRejectsRequest) ProtoMessage() {}
 
 func (x *StreamRejectsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[92]
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[93]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5222,7 +5372,1215 @@ func (x *StreamRejectsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamRejectsRequest.ProtoReflect.Descriptor instead.
 func (*StreamRejectsRequest) Descriptor() ([]byte, []int) {
-	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{92}
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{93}
+}
+
+type TxStateRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	WalletId      string                 `protobuf:"bytes,2,opt,name=wallet_id,json=walletId,proto3" json:"wallet_id,omitempty"`
+	Txid          string                 `protobuf:"bytes,3,opt,name=txid,proto3" json:"txid,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TxStateRequest) Reset() {
+	*x = TxStateRequest{}
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[94]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TxStateRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TxStateRequest) ProtoMessage() {}
+
+func (x *TxStateRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[94]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TxStateRequest.ProtoReflect.Descriptor instead.
+func (*TxStateRequest) Descriptor() ([]byte, []int) {
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{94}
+}
+
+func (x *TxStateRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *TxStateRequest) GetWalletId() string {
+	if x != nil {
+		return x.WalletId
+	}
+	return ""
+}
+
+func (x *TxStateRequest) GetTxid() string {
+	if x != nil {
+		return x.Txid
+	}
+	return ""
+}
+
+type TxStateResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// known is false when the wallet store has never seen this txid.
+	Known bool `protobuf:"varint,1,opt,name=known,proto3" json:"known,omitempty"`
+	// height the tx confirmed at, or -1 while unconfirmed.
+	Height    int32 `protobuf:"varint,2,opt,name=height,proto3" json:"height,omitempty"`
+	Confirmed bool  `protobuf:"varint,3,opt,name=confirmed,proto3" json:"confirmed,omitempty"`
+	// conflicted means the tx can no longer confirm: a confirmed tx took one
+	// of its inputs, an ancestor is conflicted, or it was abandoned.
+	Conflicted    bool `protobuf:"varint,4,opt,name=conflicted,proto3" json:"conflicted,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TxStateResponse) Reset() {
+	*x = TxStateResponse{}
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[95]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TxStateResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TxStateResponse) ProtoMessage() {}
+
+func (x *TxStateResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[95]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TxStateResponse.ProtoReflect.Descriptor instead.
+func (*TxStateResponse) Descriptor() ([]byte, []int) {
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{95}
+}
+
+func (x *TxStateResponse) GetKnown() bool {
+	if x != nil {
+		return x.Known
+	}
+	return false
+}
+
+func (x *TxStateResponse) GetHeight() int32 {
+	if x != nil {
+		return x.Height
+	}
+	return 0
+}
+
+func (x *TxStateResponse) GetConfirmed() bool {
+	if x != nil {
+		return x.Confirmed
+	}
+	return false
+}
+
+func (x *TxStateResponse) GetConflicted() bool {
+	if x != nil {
+		return x.Conflicted
+	}
+	return false
+}
+
+type AbandonTransactionRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	WalletId      string                 `protobuf:"bytes,2,opt,name=wallet_id,json=walletId,proto3" json:"wallet_id,omitempty"`
+	Txid          string                 `protobuf:"bytes,3,opt,name=txid,proto3" json:"txid,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AbandonTransactionRequest) Reset() {
+	*x = AbandonTransactionRequest{}
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[96]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AbandonTransactionRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AbandonTransactionRequest) ProtoMessage() {}
+
+func (x *AbandonTransactionRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[96]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AbandonTransactionRequest.ProtoReflect.Descriptor instead.
+func (*AbandonTransactionRequest) Descriptor() ([]byte, []int) {
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{96}
+}
+
+func (x *AbandonTransactionRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *AbandonTransactionRequest) GetWalletId() string {
+	if x != nil {
+		return x.WalletId
+	}
+	return ""
+}
+
+func (x *AbandonTransactionRequest) GetTxid() string {
+	if x != nil {
+		return x.Txid
+	}
+	return ""
+}
+
+type AbandonTransactionResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AbandonTransactionResponse) Reset() {
+	*x = AbandonTransactionResponse{}
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[97]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AbandonTransactionResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AbandonTransactionResponse) ProtoMessage() {}
+
+func (x *AbandonTransactionResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[97]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AbandonTransactionResponse.ProtoReflect.Descriptor instead.
+func (*AbandonTransactionResponse) Descriptor() ([]byte, []int) {
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{97}
+}
+
+type ClearIgnoredOutpointsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	WalletId      string                 `protobuf:"bytes,2,opt,name=wallet_id,json=walletId,proto3" json:"wallet_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ClearIgnoredOutpointsRequest) Reset() {
+	*x = ClearIgnoredOutpointsRequest{}
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[98]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ClearIgnoredOutpointsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ClearIgnoredOutpointsRequest) ProtoMessage() {}
+
+func (x *ClearIgnoredOutpointsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[98]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ClearIgnoredOutpointsRequest.ProtoReflect.Descriptor instead.
+func (*ClearIgnoredOutpointsRequest) Descriptor() ([]byte, []int) {
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{98}
+}
+
+func (x *ClearIgnoredOutpointsRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *ClearIgnoredOutpointsRequest) GetWalletId() string {
+	if x != nil {
+		return x.WalletId
+	}
+	return ""
+}
+
+type ClearIgnoredOutpointsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Cleared       int32                  `protobuf:"varint,1,opt,name=cleared,proto3" json:"cleared,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ClearIgnoredOutpointsResponse) Reset() {
+	*x = ClearIgnoredOutpointsResponse{}
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[99]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ClearIgnoredOutpointsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ClearIgnoredOutpointsResponse) ProtoMessage() {}
+
+func (x *ClearIgnoredOutpointsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[99]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ClearIgnoredOutpointsResponse.ProtoReflect.Descriptor instead.
+func (*ClearIgnoredOutpointsResponse) Descriptor() ([]byte, []int) {
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{99}
+}
+
+func (x *ClearIgnoredOutpointsResponse) GetCleared() int32 {
+	if x != nil {
+		return x.Cleared
+	}
+	return 0
+}
+
+type OwnsScriptRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	WalletId      string                 `protobuf:"bytes,2,opt,name=wallet_id,json=walletId,proto3" json:"wallet_id,omitempty"`
+	ScriptPubKey  []byte                 `protobuf:"bytes,3,opt,name=script_pub_key,json=scriptPubKey,proto3" json:"script_pub_key,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *OwnsScriptRequest) Reset() {
+	*x = OwnsScriptRequest{}
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[100]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *OwnsScriptRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*OwnsScriptRequest) ProtoMessage() {}
+
+func (x *OwnsScriptRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[100]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use OwnsScriptRequest.ProtoReflect.Descriptor instead.
+func (*OwnsScriptRequest) Descriptor() ([]byte, []int) {
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{100}
+}
+
+func (x *OwnsScriptRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *OwnsScriptRequest) GetWalletId() string {
+	if x != nil {
+		return x.WalletId
+	}
+	return ""
+}
+
+func (x *OwnsScriptRequest) GetScriptPubKey() []byte {
+	if x != nil {
+		return x.ScriptPubKey
+	}
+	return nil
+}
+
+type OwnsScriptResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Owned         bool                   `protobuf:"varint,1,opt,name=owned,proto3" json:"owned,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *OwnsScriptResponse) Reset() {
+	*x = OwnsScriptResponse{}
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[101]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *OwnsScriptResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*OwnsScriptResponse) ProtoMessage() {}
+
+func (x *OwnsScriptResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[101]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use OwnsScriptResponse.ProtoReflect.Descriptor instead.
+func (*OwnsScriptResponse) Descriptor() ([]byte, []int) {
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{101}
+}
+
+func (x *OwnsScriptResponse) GetOwned() bool {
+	if x != nil {
+		return x.Owned
+	}
+	return false
+}
+
+type VerifyTxSeenRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Txid  string                 `protobuf:"bytes,1,opt,name=txid,proto3" json:"txid,omitempty"`
+	// peers_to_ask defaults to 1.
+	PeersToAsk int32 `protobuf:"varint,2,opt,name=peers_to_ask,json=peersToAsk,proto3" json:"peers_to_ask,omitempty"`
+	// timeout_ms defaults to 10000.
+	TimeoutMs     int32 `protobuf:"varint,3,opt,name=timeout_ms,json=timeoutMs,proto3" json:"timeout_ms,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *VerifyTxSeenRequest) Reset() {
+	*x = VerifyTxSeenRequest{}
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[102]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *VerifyTxSeenRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*VerifyTxSeenRequest) ProtoMessage() {}
+
+func (x *VerifyTxSeenRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[102]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use VerifyTxSeenRequest.ProtoReflect.Descriptor instead.
+func (*VerifyTxSeenRequest) Descriptor() ([]byte, []int) {
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{102}
+}
+
+func (x *VerifyTxSeenRequest) GetTxid() string {
+	if x != nil {
+		return x.Txid
+	}
+	return ""
+}
+
+func (x *VerifyTxSeenRequest) GetPeersToAsk() int32 {
+	if x != nil {
+		return x.PeersToAsk
+	}
+	return 0
+}
+
+func (x *VerifyTxSeenRequest) GetTimeoutMs() int32 {
+	if x != nil {
+		return x.TimeoutMs
+	}
+	return 0
+}
+
+type VerifyTxSeenResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Seen          bool                   `protobuf:"varint,1,opt,name=seen,proto3" json:"seen,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *VerifyTxSeenResponse) Reset() {
+	*x = VerifyTxSeenResponse{}
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[103]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *VerifyTxSeenResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*VerifyTxSeenResponse) ProtoMessage() {}
+
+func (x *VerifyTxSeenResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[103]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use VerifyTxSeenResponse.ProtoReflect.Descriptor instead.
+func (*VerifyTxSeenResponse) Descriptor() ([]byte, []int) {
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{103}
+}
+
+func (x *VerifyTxSeenResponse) GetSeen() bool {
+	if x != nil {
+		return x.Seen
+	}
+	return false
+}
+
+type WaitForTxRelayRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Txid  string                 `protobuf:"bytes,1,opt,name=txid,proto3" json:"txid,omitempty"`
+	// timeout_ms defaults to 10000.
+	TimeoutMs     int32 `protobuf:"varint,2,opt,name=timeout_ms,json=timeoutMs,proto3" json:"timeout_ms,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WaitForTxRelayRequest) Reset() {
+	*x = WaitForTxRelayRequest{}
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[104]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WaitForTxRelayRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WaitForTxRelayRequest) ProtoMessage() {}
+
+func (x *WaitForTxRelayRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[104]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WaitForTxRelayRequest.ProtoReflect.Descriptor instead.
+func (*WaitForTxRelayRequest) Descriptor() ([]byte, []int) {
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{104}
+}
+
+func (x *WaitForTxRelayRequest) GetTxid() string {
+	if x != nil {
+		return x.Txid
+	}
+	return ""
+}
+
+func (x *WaitForTxRelayRequest) GetTimeoutMs() int32 {
+	if x != nil {
+		return x.TimeoutMs
+	}
+	return 0
+}
+
+type WaitForTxRelayResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Relayed       bool                   `protobuf:"varint,1,opt,name=relayed,proto3" json:"relayed,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WaitForTxRelayResponse) Reset() {
+	*x = WaitForTxRelayResponse{}
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[105]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WaitForTxRelayResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WaitForTxRelayResponse) ProtoMessage() {}
+
+func (x *WaitForTxRelayResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[105]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WaitForTxRelayResponse.ProtoReflect.Descriptor instead.
+func (*WaitForTxRelayResponse) Descriptor() ([]byte, []int) {
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{105}
+}
+
+func (x *WaitForTxRelayResponse) GetRelayed() bool {
+	if x != nil {
+		return x.Relayed
+	}
+	return false
+}
+
+// Rescan replays every block from a starting point back through a wallet, to
+// recover state after a restore or a long outage. It is a recovery path, not a
+// hot path: every block is pulled in full over P2P, which on mainnet can mean
+// hundreds of MB and minutes of wall time. One rescan runs per wallet at a
+// time. Cancelling the stream cancels the walk, and the blocks already
+// replayed stay applied.
+type RescanRequest struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	TenantId string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	WalletId string                 `protobuf:"bytes,2,opt,name=wallet_id,json=walletId,proto3" json:"wallet_id,omitempty"`
+	// start_block_hash is display-order hex: the block to walk forward from,
+	// chosen to predate any activity the wallet may have missed.
+	StartBlockHash string `protobuf:"bytes,3,opt,name=start_block_hash,json=startBlockHash,proto3" json:"start_block_hash,omitempty"`
+	// start_height is the absolute height of start_block_hash. Without it every
+	// replayed transaction is stamped unconfirmed and historical conflicts are
+	// not reconciled, so set it whenever the height is known.
+	StartHeight int32 `protobuf:"varint,4,opt,name=start_height,json=startHeight,proto3" json:"start_height,omitempty"`
+	// max_blocks caps the walk. 0 uses the SDK default of 2000; unbounded walks
+	// are not offered here.
+	MaxBlocks                 int32 `protobuf:"varint,5,opt,name=max_blocks,json=maxBlocks,proto3" json:"max_blocks,omitempty"`
+	HeadersTimeoutMs          int32 `protobuf:"varint,6,opt,name=headers_timeout_ms,json=headersTimeoutMs,proto3" json:"headers_timeout_ms,omitempty"`
+	BlockTimeoutMs            int32 `protobuf:"varint,7,opt,name=block_timeout_ms,json=blockTimeoutMs,proto3" json:"block_timeout_ms,omitempty"`
+	MaxConsecutiveBlockErrors int32 `protobuf:"varint,8,opt,name=max_consecutive_block_errors,json=maxConsecutiveBlockErrors,proto3" json:"max_consecutive_block_errors,omitempty"`
+	// checkpoint_every flushes the address snapshot every N blocks. 0 disables.
+	CheckpointEvery int32 `protobuf:"varint,9,opt,name=checkpoint_every,json=checkpointEvery,proto3" json:"checkpoint_every,omitempty"`
+	// gc_every returns allocator slack to the OS every N blocks. 0 disables.
+	GcEvery int32 `protobuf:"varint,10,opt,name=gc_every,json=gcEvery,proto3" json:"gc_every,omitempty"`
+	// prefetch is how many block requests may be in flight at once. 0 uses one
+	// per connected peer, 1 restores serial fetching.
+	Prefetch         int32 `protobuf:"varint,11,opt,name=prefetch,proto3" json:"prefetch,omitempty"`
+	PrefetchBytes    int64 `protobuf:"varint,12,opt,name=prefetch_bytes,json=prefetchBytes,proto3" json:"prefetch_bytes,omitempty"`
+	StreamBlockBytes int64 `protobuf:"varint,13,opt,name=stream_block_bytes,json=streamBlockBytes,proto3" json:"stream_block_bytes,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *RescanRequest) Reset() {
+	*x = RescanRequest{}
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[106]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RescanRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RescanRequest) ProtoMessage() {}
+
+func (x *RescanRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[106]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RescanRequest.ProtoReflect.Descriptor instead.
+func (*RescanRequest) Descriptor() ([]byte, []int) {
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{106}
+}
+
+func (x *RescanRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *RescanRequest) GetWalletId() string {
+	if x != nil {
+		return x.WalletId
+	}
+	return ""
+}
+
+func (x *RescanRequest) GetStartBlockHash() string {
+	if x != nil {
+		return x.StartBlockHash
+	}
+	return ""
+}
+
+func (x *RescanRequest) GetStartHeight() int32 {
+	if x != nil {
+		return x.StartHeight
+	}
+	return 0
+}
+
+func (x *RescanRequest) GetMaxBlocks() int32 {
+	if x != nil {
+		return x.MaxBlocks
+	}
+	return 0
+}
+
+func (x *RescanRequest) GetHeadersTimeoutMs() int32 {
+	if x != nil {
+		return x.HeadersTimeoutMs
+	}
+	return 0
+}
+
+func (x *RescanRequest) GetBlockTimeoutMs() int32 {
+	if x != nil {
+		return x.BlockTimeoutMs
+	}
+	return 0
+}
+
+func (x *RescanRequest) GetMaxConsecutiveBlockErrors() int32 {
+	if x != nil {
+		return x.MaxConsecutiveBlockErrors
+	}
+	return 0
+}
+
+func (x *RescanRequest) GetCheckpointEvery() int32 {
+	if x != nil {
+		return x.CheckpointEvery
+	}
+	return 0
+}
+
+func (x *RescanRequest) GetGcEvery() int32 {
+	if x != nil {
+		return x.GcEvery
+	}
+	return 0
+}
+
+func (x *RescanRequest) GetPrefetch() int32 {
+	if x != nil {
+		return x.Prefetch
+	}
+	return 0
+}
+
+func (x *RescanRequest) GetPrefetchBytes() int64 {
+	if x != nil {
+		return x.PrefetchBytes
+	}
+	return 0
+}
+
+func (x *RescanRequest) GetStreamBlockBytes() int64 {
+	if x != nil {
+		return x.StreamBlockBytes
+	}
+	return 0
+}
+
+type RescanProgress struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Phase         string                 `protobuf:"bytes,1,opt,name=phase,proto3" json:"phase,omitempty"`
+	Peer          string                 `protobuf:"bytes,2,opt,name=peer,proto3" json:"peer,omitempty"`
+	HeadersSeen   int32                  `protobuf:"varint,3,opt,name=headers_seen,json=headersSeen,proto3" json:"headers_seen,omitempty"`
+	BatchHeaders  int32                  `protobuf:"varint,4,opt,name=batch_headers,json=batchHeaders,proto3" json:"batch_headers,omitempty"`
+	BlocksFetched int32                  `protobuf:"varint,5,opt,name=blocks_fetched,json=blocksFetched,proto3" json:"blocks_fetched,omitempty"`
+	TxsReplayed   int32                  `protobuf:"varint,6,opt,name=txs_replayed,json=txsReplayed,proto3" json:"txs_replayed,omitempty"`
+	Errors        int32                  `protobuf:"varint,7,opt,name=errors,proto3" json:"errors,omitempty"`
+	BlockHash     string                 `protobuf:"bytes,8,opt,name=block_hash,json=blockHash,proto3" json:"block_hash,omitempty"`
+	Message       string                 `protobuf:"bytes,9,opt,name=message,proto3" json:"message,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RescanProgress) Reset() {
+	*x = RescanProgress{}
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[107]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RescanProgress) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RescanProgress) ProtoMessage() {}
+
+func (x *RescanProgress) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[107]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RescanProgress.ProtoReflect.Descriptor instead.
+func (*RescanProgress) Descriptor() ([]byte, []int) {
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{107}
+}
+
+func (x *RescanProgress) GetPhase() string {
+	if x != nil {
+		return x.Phase
+	}
+	return ""
+}
+
+func (x *RescanProgress) GetPeer() string {
+	if x != nil {
+		return x.Peer
+	}
+	return ""
+}
+
+func (x *RescanProgress) GetHeadersSeen() int32 {
+	if x != nil {
+		return x.HeadersSeen
+	}
+	return 0
+}
+
+func (x *RescanProgress) GetBatchHeaders() int32 {
+	if x != nil {
+		return x.BatchHeaders
+	}
+	return 0
+}
+
+func (x *RescanProgress) GetBlocksFetched() int32 {
+	if x != nil {
+		return x.BlocksFetched
+	}
+	return 0
+}
+
+func (x *RescanProgress) GetTxsReplayed() int32 {
+	if x != nil {
+		return x.TxsReplayed
+	}
+	return 0
+}
+
+func (x *RescanProgress) GetErrors() int32 {
+	if x != nil {
+		return x.Errors
+	}
+	return 0
+}
+
+func (x *RescanProgress) GetBlockHash() string {
+	if x != nil {
+		return x.BlockHash
+	}
+	return ""
+}
+
+func (x *RescanProgress) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
+type RescanStats struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	HeadersSeen   int32                  `protobuf:"varint,1,opt,name=headers_seen,json=headersSeen,proto3" json:"headers_seen,omitempty"`
+	BlocksFetched int32                  `protobuf:"varint,2,opt,name=blocks_fetched,json=blocksFetched,proto3" json:"blocks_fetched,omitempty"`
+	TxsReplayed   int32                  `protobuf:"varint,3,opt,name=txs_replayed,json=txsReplayed,proto3" json:"txs_replayed,omitempty"`
+	// stopped_at is the last block whose transactions were replayed, in
+	// display-order hex, or empty if none were.
+	StoppedAt     string `protobuf:"bytes,4,opt,name=stopped_at,json=stoppedAt,proto3" json:"stopped_at,omitempty"`
+	StoppedHeight int32  `protobuf:"varint,5,opt,name=stopped_height,json=stoppedHeight,proto3" json:"stopped_height,omitempty"`
+	// peer_switches counts how often the walk moved to another peer to keep
+	// making progress.
+	PeerSwitches int32 `protobuf:"varint,6,opt,name=peer_switches,json=peerSwitches,proto3" json:"peer_switches,omitempty"`
+	// errors are non-fatal: the walk carried on past them.
+	Errors        []string `protobuf:"bytes,7,rep,name=errors,proto3" json:"errors,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RescanStats) Reset() {
+	*x = RescanStats{}
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[108]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RescanStats) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RescanStats) ProtoMessage() {}
+
+func (x *RescanStats) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[108]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RescanStats.ProtoReflect.Descriptor instead.
+func (*RescanStats) Descriptor() ([]byte, []int) {
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{108}
+}
+
+func (x *RescanStats) GetHeadersSeen() int32 {
+	if x != nil {
+		return x.HeadersSeen
+	}
+	return 0
+}
+
+func (x *RescanStats) GetBlocksFetched() int32 {
+	if x != nil {
+		return x.BlocksFetched
+	}
+	return 0
+}
+
+func (x *RescanStats) GetTxsReplayed() int32 {
+	if x != nil {
+		return x.TxsReplayed
+	}
+	return 0
+}
+
+func (x *RescanStats) GetStoppedAt() string {
+	if x != nil {
+		return x.StoppedAt
+	}
+	return ""
+}
+
+func (x *RescanStats) GetStoppedHeight() int32 {
+	if x != nil {
+		return x.StoppedHeight
+	}
+	return 0
+}
+
+func (x *RescanStats) GetPeerSwitches() int32 {
+	if x != nil {
+		return x.PeerSwitches
+	}
+	return 0
+}
+
+func (x *RescanStats) GetErrors() []string {
+	if x != nil {
+		return x.Errors
+	}
+	return nil
+}
+
+// RescanEvent is a progress heartbeat while the walk runs, then exactly one
+// stats message as the final item on the stream.
+type RescanEvent struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Event:
+	//
+	//	*RescanEvent_Progress
+	//	*RescanEvent_Stats
+	Event         isRescanEvent_Event `protobuf_oneof:"event"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RescanEvent) Reset() {
+	*x = RescanEvent{}
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[109]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RescanEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RescanEvent) ProtoMessage() {}
+
+func (x *RescanEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[109]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RescanEvent.ProtoReflect.Descriptor instead.
+func (*RescanEvent) Descriptor() ([]byte, []int) {
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{109}
+}
+
+func (x *RescanEvent) GetEvent() isRescanEvent_Event {
+	if x != nil {
+		return x.Event
+	}
+	return nil
+}
+
+func (x *RescanEvent) GetProgress() *RescanProgress {
+	if x != nil {
+		if x, ok := x.Event.(*RescanEvent_Progress); ok {
+			return x.Progress
+		}
+	}
+	return nil
+}
+
+func (x *RescanEvent) GetStats() *RescanStats {
+	if x != nil {
+		if x, ok := x.Event.(*RescanEvent_Stats); ok {
+			return x.Stats
+		}
+	}
+	return nil
+}
+
+type isRescanEvent_Event interface {
+	isRescanEvent_Event()
+}
+
+type RescanEvent_Progress struct {
+	Progress *RescanProgress `protobuf:"bytes,1,opt,name=progress,proto3,oneof"`
+}
+
+type RescanEvent_Stats struct {
+	Stats *RescanStats `protobuf:"bytes,2,opt,name=stats,proto3,oneof"`
+}
+
+func (*RescanEvent_Progress) isRescanEvent_Event() {}
+
+func (*RescanEvent_Stats) isRescanEvent_Event() {}
+
+type GetIncompleteCursorRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	WalletId      string                 `protobuf:"bytes,2,opt,name=wallet_id,json=walletId,proto3" json:"wallet_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetIncompleteCursorRequest) Reset() {
+	*x = GetIncompleteCursorRequest{}
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[110]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetIncompleteCursorRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetIncompleteCursorRequest) ProtoMessage() {}
+
+func (x *GetIncompleteCursorRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[110]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetIncompleteCursorRequest.ProtoReflect.Descriptor instead.
+func (*GetIncompleteCursorRequest) Descriptor() ([]byte, []int) {
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{110}
+}
+
+func (x *GetIncompleteCursorRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *GetIncompleteCursorRequest) GetWalletId() string {
+	if x != nil {
+		return x.WalletId
+	}
+	return ""
+}
+
+// GetIncompleteCursorResponse reports a block the wallet began applying but
+// never finished, which is how a crash mid-block shows up. Call it at startup:
+// when found is set, rescan from height - 1 to make the wallet whole.
+type GetIncompleteCursorResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Found         bool                   `protobuf:"varint,1,opt,name=found,proto3" json:"found,omitempty"`
+	BlockHash     string                 `protobuf:"bytes,2,opt,name=block_hash,json=blockHash,proto3" json:"block_hash,omitempty"`
+	Height        int32                  `protobuf:"varint,3,opt,name=height,proto3" json:"height,omitempty"`
+	TxDone        int32                  `protobuf:"varint,4,opt,name=tx_done,json=txDone,proto3" json:"tx_done,omitempty"`
+	TxTotal       int32                  `protobuf:"varint,5,opt,name=tx_total,json=txTotal,proto3" json:"tx_total,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetIncompleteCursorResponse) Reset() {
+	*x = GetIncompleteCursorResponse{}
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[111]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetIncompleteCursorResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetIncompleteCursorResponse) ProtoMessage() {}
+
+func (x *GetIncompleteCursorResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_bsvms_v1_bsvms_proto_msgTypes[111]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetIncompleteCursorResponse.ProtoReflect.Descriptor instead.
+func (*GetIncompleteCursorResponse) Descriptor() ([]byte, []int) {
+	return file_proto_bsvms_v1_bsvms_proto_rawDescGZIP(), []int{111}
+}
+
+func (x *GetIncompleteCursorResponse) GetFound() bool {
+	if x != nil {
+		return x.Found
+	}
+	return false
+}
+
+func (x *GetIncompleteCursorResponse) GetBlockHash() string {
+	if x != nil {
+		return x.BlockHash
+	}
+	return ""
+}
+
+func (x *GetIncompleteCursorResponse) GetHeight() int32 {
+	if x != nil {
+		return x.Height
+	}
+	return 0
+}
+
+func (x *GetIncompleteCursorResponse) GetTxDone() int32 {
+	if x != nil {
+		return x.TxDone
+	}
+	return 0
+}
+
+func (x *GetIncompleteCursorResponse) GetTxTotal() int32 {
+	if x != nil {
+		return x.TxTotal
+	}
+	return 0
 }
 
 var File_proto_bsvms_v1_bsvms_proto protoreflect.FileDescriptor
@@ -5230,7 +6588,7 @@ var File_proto_bsvms_v1_bsvms_proto protoreflect.FileDescriptor
 const file_proto_bsvms_v1_bsvms_proto_rawDesc = "" +
 	"\n" +
 	"\x1aproto/bsvms/v1/bsvms.proto\x12\bbsvms.v1\"\x0f\n" +
-	"\rStatusRequest\"\xbf\x02\n" +
+	"\rStatusRequest\"\xec\x02\n" +
 	"\x0eStatusResponse\x12\x18\n" +
 	"\anetwork\x18\x01 \x01(\tR\anetwork\x12!\n" +
 	"\fchain_height\x18\x02 \x01(\x05R\vchainHeight\x12(\n" +
@@ -5238,7 +6596,8 @@ const file_proto_bsvms_v1_bsvms_proto_rawDesc = "" +
 	"\n" +
 	"peer_count\x18\x04 \x01(\x05R\tpeerCount\x12\x19\n" +
 	"\bdata_dir\x18\x05 \x01(\tR\adataDir\x12L\n" +
-	"\fpeer_heights\x18\x06 \x03(\v2).bsvms.v1.StatusResponse.PeerHeightsEntryR\vpeerHeights\x1a>\n" +
+	"\fpeer_heights\x18\x06 \x03(\v2).bsvms.v1.StatusResponse.PeerHeightsEntryR\vpeerHeights\x12+\n" +
+	"\x11coinbase_maturity\x18\a \x01(\x05R\x10coinbaseMaturity\x1a>\n" +
 	"\x10PeerHeightsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\x05R\x05value:\x028\x01\"\xcc\x01\n" +
@@ -5259,7 +6618,7 @@ const file_proto_bsvms_v1_bsvms_proto_rawDesc = "" +
 	"\x13ConnectPeerResponse\"H\n" +
 	"\fTenantWallet\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1b\n" +
-	"\twallet_id\x18\x02 \x01(\tR\bwalletId\"\xa4\x02\n" +
+	"\twallet_id\x18\x02 \x01(\tR\bwalletId\"\x80\x03\n" +
 	"\x06Wallet\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1b\n" +
 	"\twallet_id\x18\x02 \x01(\tR\bwalletId\x12\x1c\n" +
@@ -5269,7 +6628,10 @@ const file_proto_bsvms_v1_bsvms_proto_rawDesc = "" +
 	"balanceBsv\x12.\n" +
 	"\x13next_external_index\x18\x06 \x01(\rR\x11nextExternalIndex\x12*\n" +
 	"\x11next_change_index\x18\a \x01(\rR\x0fnextChangeIndex\x12\x1a\n" +
-	"\bselector\x18\b \x01(\tR\bselector\"1\n" +
+	"\bselector\x18\b \x01(\tR\bselector\x12-\n" +
+	"\x12spendable_satoshis\x18\t \x01(\x03R\x11spendableSatoshis\x12+\n" +
+	"\x11immature_satoshis\x18\n" +
+	" \x01(\x03R\x10immatureSatoshis\"1\n" +
 	"\x12ListWalletsRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\"A\n" +
 	"\x13ListWalletsResponse\x12*\n" +
@@ -5343,21 +6705,25 @@ const file_proto_bsvms_v1_bsvms_proto_rawDesc = "" +
 	"next_index\x18\x01 \x01(\rR\tnextIndex\"J\n" +
 	"\x0eBalanceRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1b\n" +
-	"\twallet_id\x18\x02 \x01(\tR\bwalletId\"?\n" +
+	"\twallet_id\x18\x02 \x01(\tR\bwalletId\"y\n" +
 	"\x0fBalanceResponse\x12\x1a\n" +
 	"\bsatoshis\x18\x01 \x01(\x03R\bsatoshis\x12\x10\n" +
-	"\x03bsv\x18\x02 \x01(\x01R\x03bsv\"t\n" +
+	"\x03bsv\x18\x02 \x01(\x01R\x03bsv\x12\x1c\n" +
+	"\tspendable\x18\x03 \x01(\x03R\tspendable\x12\x1a\n" +
+	"\bimmature\x18\x04 \x01(\x03R\bimmature\"\x95\x01\n" +
 	"\x04UTXO\x12\x12\n" +
 	"\x04txid\x18\x01 \x01(\tR\x04txid\x12\x12\n" +
 	"\x04vout\x18\x02 \x01(\rR\x04vout\x12\x14\n" +
 	"\x05value\x18\x03 \x01(\x03R\x05value\x12\x16\n" +
 	"\x06script\x18\x04 \x01(\fR\x06script\x12\x16\n" +
-	"\x06height\x18\x05 \x01(\x05R\x06height\"L\n" +
+	"\x06height\x18\x05 \x01(\x05R\x06height\x12\x1f\n" +
+	"\vis_coinbase\x18\x06 \x01(\bR\n" +
+	"isCoinbase\"L\n" +
 	"\x10ListUTXOsRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1b\n" +
 	"\twallet_id\x18\x02 \x01(\tR\bwalletId\"9\n" +
 	"\x11ListUTXOsResponse\x12$\n" +
-	"\x05utxos\x18\x01 \x03(\v2\x0e.bsvms.v1.UTXOR\x05utxos\"\xd1\x01\n" +
+	"\x05utxos\x18\x01 \x03(\v2\x0e.bsvms.v1.UTXOR\x05utxos\"\xf2\x01\n" +
 	"\x11ImportUTXORequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1b\n" +
 	"\twallet_id\x18\x02 \x01(\tR\bwalletId\x12\x12\n" +
@@ -5366,7 +6732,9 @@ const file_proto_bsvms_v1_bsvms_proto_rawDesc = "" +
 	"\x05value\x18\x05 \x01(\x03R\x05value\x12\x16\n" +
 	"\x06script\x18\x06 \x01(\fR\x06script\x12\x16\n" +
 	"\x06height\x18\a \x01(\x05R\x06height\x12\x14\n" +
-	"\x05force\x18\b \x01(\bR\x05force\"\x14\n" +
+	"\x05force\x18\b \x01(\bR\x05force\x12\x1f\n" +
+	"\vis_coinbase\x18\t \x01(\bR\n" +
+	"isCoinbase\"\x14\n" +
 	"\x12ImportUTXOResponse\"~\n" +
 	"\x13ProcessRawTxRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1b\n" +
@@ -5440,12 +6808,17 @@ const file_proto_bsvms_v1_bsvms_proto_rawDesc = "" +
 	"\n" +
 	"OutputSpec\x12\x16\n" +
 	"\x06script\x18\x01 \x01(\fR\x06script\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\x03R\x05value\"\xb3\x01\n" +
+	"\x05value\x18\x02 \x01(\x03R\x05value\"2\n" +
+	"\bOutPoint\x12\x12\n" +
+	"\x04txid\x18\x01 \x01(\tR\x04txid\x12\x12\n" +
+	"\x04vout\x18\x02 \x01(\rR\x04vout\"\xe8\x01\n" +
 	"\x15SpendToOutputsRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1b\n" +
 	"\twallet_id\x18\x02 \x01(\tR\bwalletId\x12.\n" +
 	"\aoutputs\x18\x03 \x03(\v2\x14.bsvms.v1.OutputSpecR\aoutputs\x120\n" +
-	"\x14ignore_fixed_outputs\x18\x04 \x01(\bR\x12ignoreFixedOutputs\"\xaf\x01\n" +
+	"\x14ignore_fixed_outputs\x18\x04 \x01(\bR\x12ignoreFixedOutputs\x123\n" +
+	"\vfrom_inputs\x18\x05 \x03(\v2\x12.bsvms.v1.OutPointR\n" +
+	"fromInputs\"\xaf\x01\n" +
 	"\vSpendDetail\x12\x12\n" +
 	"\x04txid\x18\x01 \x01(\tR\x04txid\x12/\n" +
 	"\vspent_utxos\x18\x02 \x03(\v2\x0e.bsvms.v1.UTXOR\n" +
@@ -5494,7 +6867,7 @@ const file_proto_bsvms_v1_bsvms_proto_rawDesc = "" +
 	"\x13BroadcastRawRequest\x12\x15\n" +
 	"\x06raw_tx\x18\x01 \x01(\fR\x05rawTx\"*\n" +
 	"\x14BroadcastRawResponse\x12\x12\n" +
-	"\x04txid\x18\x01 \x01(\tR\x04txid\"\xab\x01\n" +
+	"\x04txid\x18\x01 \x01(\tR\x04txid\"\xc3\x01\n" +
 	"\x14ExecuteScriptRequest\x12\x1d\n" +
 	"\n" +
 	"script_sig\x18\x01 \x01(\fR\tscriptSig\x12$\n" +
@@ -5502,7 +6875,8 @@ const file_proto_bsvms_v1_bsvms_proto_rawDesc = "" +
 	"\x06raw_tx\x18\x03 \x01(\fR\x05rawTx\x12\x1f\n" +
 	"\vinput_index\x18\x04 \x01(\x05R\n" +
 	"inputIndex\x12\x16\n" +
-	"\x06amount\x18\x05 \x01(\x03R\x06amount\"=\n" +
+	"\x06amount\x18\x05 \x01(\x03R\x06amount\x12\x16\n" +
+	"\x06strict\x18\x06 \x01(\bR\x06strict\"=\n" +
 	"\x15ExecuteScriptResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\"B\n" +
@@ -5523,12 +6897,13 @@ const file_proto_bsvms_v1_bsvms_proto_rawDesc = "" +
 	"%RebroadcastPendingTransactionsRequest\">\n" +
 	"&RebroadcastPendingTransactionsResponse\x12\x14\n" +
 	"\x05count\x18\x01 \x01(\x05R\x05count\"\x1b\n" +
-	"\x19StreamTransactionsRequest\"w\n" +
+	"\x19StreamTransactionsRequest\"\x9b\x01\n" +
 	"\x05Block\x12\x12\n" +
 	"\x04hash\x18\x01 \x01(\tR\x04hash\x12\x16\n" +
 	"\x06height\x18\x02 \x01(\x05R\x06height\x12\x14\n" +
 	"\x05txids\x18\x03 \x03(\tR\x05txids\x12,\n" +
-	"\x06spends\x18\x04 \x03(\v2\x14.bsvms.v1.BlockSpendR\x06spends\"k\n" +
+	"\x06spends\x18\x04 \x03(\v2\x14.bsvms.v1.BlockSpendR\x06spends\x12\"\n" +
+	"\fdisconnected\x18\x05 \x01(\bR\fdisconnected\"k\n" +
 	"\n" +
 	"BlockSpend\x12\x1b\n" +
 	"\tprev_txid\x18\x01 \x01(\tR\bprevTxid\x12\x1b\n" +
@@ -5578,7 +6953,98 @@ const file_proto_bsvms_v1_bsvms_proto_rawDesc = "" +
 	"\tcode_name\x18\x04 \x01(\tR\bcodeName\x12\x16\n" +
 	"\x06reason\x18\x05 \x01(\tR\x06reason\x12\x12\n" +
 	"\x04hash\x18\x06 \x01(\tR\x04hash\"\x16\n" +
-	"\x14StreamRejectsRequest2\xf4\x1a\n" +
+	"\x14StreamRejectsRequest\"^\n" +
+	"\x0eTxStateRequest\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1b\n" +
+	"\twallet_id\x18\x02 \x01(\tR\bwalletId\x12\x12\n" +
+	"\x04txid\x18\x03 \x01(\tR\x04txid\"}\n" +
+	"\x0fTxStateResponse\x12\x14\n" +
+	"\x05known\x18\x01 \x01(\bR\x05known\x12\x16\n" +
+	"\x06height\x18\x02 \x01(\x05R\x06height\x12\x1c\n" +
+	"\tconfirmed\x18\x03 \x01(\bR\tconfirmed\x12\x1e\n" +
+	"\n" +
+	"conflicted\x18\x04 \x01(\bR\n" +
+	"conflicted\"i\n" +
+	"\x19AbandonTransactionRequest\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1b\n" +
+	"\twallet_id\x18\x02 \x01(\tR\bwalletId\x12\x12\n" +
+	"\x04txid\x18\x03 \x01(\tR\x04txid\"\x1c\n" +
+	"\x1aAbandonTransactionResponse\"X\n" +
+	"\x1cClearIgnoredOutpointsRequest\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1b\n" +
+	"\twallet_id\x18\x02 \x01(\tR\bwalletId\"9\n" +
+	"\x1dClearIgnoredOutpointsResponse\x12\x18\n" +
+	"\acleared\x18\x01 \x01(\x05R\acleared\"s\n" +
+	"\x11OwnsScriptRequest\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1b\n" +
+	"\twallet_id\x18\x02 \x01(\tR\bwalletId\x12$\n" +
+	"\x0escript_pub_key\x18\x03 \x01(\fR\fscriptPubKey\"*\n" +
+	"\x12OwnsScriptResponse\x12\x14\n" +
+	"\x05owned\x18\x01 \x01(\bR\x05owned\"j\n" +
+	"\x13VerifyTxSeenRequest\x12\x12\n" +
+	"\x04txid\x18\x01 \x01(\tR\x04txid\x12 \n" +
+	"\fpeers_to_ask\x18\x02 \x01(\x05R\n" +
+	"peersToAsk\x12\x1d\n" +
+	"\n" +
+	"timeout_ms\x18\x03 \x01(\x05R\ttimeoutMs\"*\n" +
+	"\x14VerifyTxSeenResponse\x12\x12\n" +
+	"\x04seen\x18\x01 \x01(\bR\x04seen\"J\n" +
+	"\x15WaitForTxRelayRequest\x12\x12\n" +
+	"\x04txid\x18\x01 \x01(\tR\x04txid\x12\x1d\n" +
+	"\n" +
+	"timeout_ms\x18\x02 \x01(\x05R\ttimeoutMs\"2\n" +
+	"\x16WaitForTxRelayResponse\x12\x18\n" +
+	"\arelayed\x18\x01 \x01(\bR\arelayed\"\x85\x04\n" +
+	"\rRescanRequest\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1b\n" +
+	"\twallet_id\x18\x02 \x01(\tR\bwalletId\x12(\n" +
+	"\x10start_block_hash\x18\x03 \x01(\tR\x0estartBlockHash\x12!\n" +
+	"\fstart_height\x18\x04 \x01(\x05R\vstartHeight\x12\x1d\n" +
+	"\n" +
+	"max_blocks\x18\x05 \x01(\x05R\tmaxBlocks\x12,\n" +
+	"\x12headers_timeout_ms\x18\x06 \x01(\x05R\x10headersTimeoutMs\x12(\n" +
+	"\x10block_timeout_ms\x18\a \x01(\x05R\x0eblockTimeoutMs\x12?\n" +
+	"\x1cmax_consecutive_block_errors\x18\b \x01(\x05R\x19maxConsecutiveBlockErrors\x12)\n" +
+	"\x10checkpoint_every\x18\t \x01(\x05R\x0fcheckpointEvery\x12\x19\n" +
+	"\bgc_every\x18\n" +
+	" \x01(\x05R\agcEvery\x12\x1a\n" +
+	"\bprefetch\x18\v \x01(\x05R\bprefetch\x12%\n" +
+	"\x0eprefetch_bytes\x18\f \x01(\x03R\rprefetchBytes\x12,\n" +
+	"\x12stream_block_bytes\x18\r \x01(\x03R\x10streamBlockBytes\"\x9d\x02\n" +
+	"\x0eRescanProgress\x12\x14\n" +
+	"\x05phase\x18\x01 \x01(\tR\x05phase\x12\x12\n" +
+	"\x04peer\x18\x02 \x01(\tR\x04peer\x12!\n" +
+	"\fheaders_seen\x18\x03 \x01(\x05R\vheadersSeen\x12#\n" +
+	"\rbatch_headers\x18\x04 \x01(\x05R\fbatchHeaders\x12%\n" +
+	"\x0eblocks_fetched\x18\x05 \x01(\x05R\rblocksFetched\x12!\n" +
+	"\ftxs_replayed\x18\x06 \x01(\x05R\vtxsReplayed\x12\x16\n" +
+	"\x06errors\x18\a \x01(\x05R\x06errors\x12\x1d\n" +
+	"\n" +
+	"block_hash\x18\b \x01(\tR\tblockHash\x12\x18\n" +
+	"\amessage\x18\t \x01(\tR\amessage\"\xfd\x01\n" +
+	"\vRescanStats\x12!\n" +
+	"\fheaders_seen\x18\x01 \x01(\x05R\vheadersSeen\x12%\n" +
+	"\x0eblocks_fetched\x18\x02 \x01(\x05R\rblocksFetched\x12!\n" +
+	"\ftxs_replayed\x18\x03 \x01(\x05R\vtxsReplayed\x12\x1d\n" +
+	"\n" +
+	"stopped_at\x18\x04 \x01(\tR\tstoppedAt\x12%\n" +
+	"\x0estopped_height\x18\x05 \x01(\x05R\rstoppedHeight\x12#\n" +
+	"\rpeer_switches\x18\x06 \x01(\x05R\fpeerSwitches\x12\x16\n" +
+	"\x06errors\x18\a \x03(\tR\x06errors\"}\n" +
+	"\vRescanEvent\x126\n" +
+	"\bprogress\x18\x01 \x01(\v2\x18.bsvms.v1.RescanProgressH\x00R\bprogress\x12-\n" +
+	"\x05stats\x18\x02 \x01(\v2\x15.bsvms.v1.RescanStatsH\x00R\x05statsB\a\n" +
+	"\x05event\"V\n" +
+	"\x1aGetIncompleteCursorRequest\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1b\n" +
+	"\twallet_id\x18\x02 \x01(\tR\bwalletId\"\x9e\x01\n" +
+	"\x1bGetIncompleteCursorResponse\x12\x14\n" +
+	"\x05found\x18\x01 \x01(\bR\x05found\x12\x1d\n" +
+	"\n" +
+	"block_hash\x18\x02 \x01(\tR\tblockHash\x12\x16\n" +
+	"\x06height\x18\x03 \x01(\x05R\x06height\x12\x17\n" +
+	"\atx_done\x18\x04 \x01(\x05R\x06txDone\x12\x19\n" +
+	"\btx_total\x18\x05 \x01(\x05R\atxTotal2\x8c \n" +
 	"\x05BSVMS\x12;\n" +
 	"\x06Status\x12\x17.bsvms.v1.StatusRequest\x1a\x18.bsvms.v1.StatusResponse\x12C\n" +
 	"\fRefreshToken\x12\x1d.bsvms.v1.RefreshTokenRequest\x1a\x14.bsvms.v1.AuthTokens\x12J\n" +
@@ -5628,7 +7094,16 @@ const file_proto_bsvms_v1_bsvms_proto_rawDesc = "" +
 	"\x0eStreamPayments\x12\x1f.bsvms.v1.StreamPaymentsRequest\x1a\x11.bsvms.v1.Payment0\x01\x12d\n" +
 	"\x18StreamWalletTransactions\x12).bsvms.v1.StreamWalletTransactionsRequest\x1a\x1b.bsvms.v1.WalletTransaction0\x01\x12M\n" +
 	"\x10StreamP2PTraffic\x12!.bsvms.v1.StreamP2PTrafficRequest\x1a\x14.bsvms.v1.P2PTraffic0\x01\x12C\n" +
-	"\rStreamRejects\x12\x1e.bsvms.v1.StreamRejectsRequest\x1a\x10.bsvms.v1.Reject0\x01B0Z.github.com/brad1121/bsvms/gen/bsvms/v1;bsvmspbb\x06proto3"
+	"\rStreamRejects\x12\x1e.bsvms.v1.StreamRejectsRequest\x1a\x10.bsvms.v1.Reject0\x01\x12>\n" +
+	"\aTxState\x12\x18.bsvms.v1.TxStateRequest\x1a\x19.bsvms.v1.TxStateResponse\x12_\n" +
+	"\x12AbandonTransaction\x12#.bsvms.v1.AbandonTransactionRequest\x1a$.bsvms.v1.AbandonTransactionResponse\x12h\n" +
+	"\x15ClearIgnoredOutpoints\x12&.bsvms.v1.ClearIgnoredOutpointsRequest\x1a'.bsvms.v1.ClearIgnoredOutpointsResponse\x12G\n" +
+	"\n" +
+	"OwnsScript\x12\x1b.bsvms.v1.OwnsScriptRequest\x1a\x1c.bsvms.v1.OwnsScriptResponse\x12M\n" +
+	"\fVerifyTxSeen\x12\x1d.bsvms.v1.VerifyTxSeenRequest\x1a\x1e.bsvms.v1.VerifyTxSeenResponse\x12S\n" +
+	"\x0eWaitForTxRelay\x12\x1f.bsvms.v1.WaitForTxRelayRequest\x1a .bsvms.v1.WaitForTxRelayResponse\x12:\n" +
+	"\x06Rescan\x12\x17.bsvms.v1.RescanRequest\x1a\x15.bsvms.v1.RescanEvent0\x01\x12b\n" +
+	"\x13GetIncompleteCursor\x12$.bsvms.v1.GetIncompleteCursorRequest\x1a%.bsvms.v1.GetIncompleteCursorResponseB0Z.github.com/brad1121/bsvms/gen/bsvms/v1;bsvmspbb\x06proto3"
 
 var (
 	file_proto_bsvms_v1_bsvms_proto_rawDescOnce sync.Once
@@ -5642,7 +7117,7 @@ func file_proto_bsvms_v1_bsvms_proto_rawDescGZIP() []byte {
 	return file_proto_bsvms_v1_bsvms_proto_rawDescData
 }
 
-var file_proto_bsvms_v1_bsvms_proto_msgTypes = make([]protoimpl.MessageInfo, 94)
+var file_proto_bsvms_v1_bsvms_proto_msgTypes = make([]protoimpl.MessageInfo, 113)
 var file_proto_bsvms_v1_bsvms_proto_goTypes = []any{
 	(*StatusRequest)(nil),                          // 0: bsvms.v1.StatusRequest
 	(*StatusResponse)(nil),                         // 1: bsvms.v1.StatusResponse
@@ -5700,161 +7175,199 @@ var file_proto_bsvms_v1_bsvms_proto_goTypes = []any{
 	(*SendAllRequest)(nil),                         // 53: bsvms.v1.SendAllRequest
 	(*SpendResponse)(nil),                          // 54: bsvms.v1.SpendResponse
 	(*OutputSpec)(nil),                             // 55: bsvms.v1.OutputSpec
-	(*SpendToOutputsRequest)(nil),                  // 56: bsvms.v1.SpendToOutputsRequest
-	(*SpendDetail)(nil),                            // 57: bsvms.v1.SpendDetail
-	(*SpendDetailResponse)(nil),                    // 58: bsvms.v1.SpendDetailResponse
-	(*CustomInput)(nil),                            // 59: bsvms.v1.CustomInput
-	(*BroadcastCustomSpendRequest)(nil),            // 60: bsvms.v1.BroadcastCustomSpendRequest
-	(*P2PKHOutputRequest)(nil),                     // 61: bsvms.v1.P2PKHOutputRequest
-	(*OpReturnOutputRequest)(nil),                  // 62: bsvms.v1.OpReturnOutputRequest
-	(*AnyoneCanSpendOutputRequest)(nil),            // 63: bsvms.v1.AnyoneCanSpendOutputRequest
-	(*ParseTransactionRequest)(nil),                // 64: bsvms.v1.ParseTransactionRequest
-	(*Transaction)(nil),                            // 65: bsvms.v1.Transaction
-	(*TxInput)(nil),                                // 66: bsvms.v1.TxInput
-	(*TxOutput)(nil),                               // 67: bsvms.v1.TxOutput
-	(*BroadcastRawRequest)(nil),                    // 68: bsvms.v1.BroadcastRawRequest
-	(*BroadcastRawResponse)(nil),                   // 69: bsvms.v1.BroadcastRawResponse
-	(*ExecuteScriptRequest)(nil),                   // 70: bsvms.v1.ExecuteScriptRequest
-	(*ExecuteScriptResponse)(nil),                  // 71: bsvms.v1.ExecuteScriptResponse
-	(*DecodeOutputAddressRequest)(nil),             // 72: bsvms.v1.DecodeOutputAddressRequest
-	(*DecodeOutputAddressResponse)(nil),            // 73: bsvms.v1.DecodeOutputAddressResponse
-	(*PendingTransactionsRequest)(nil),             // 74: bsvms.v1.PendingTransactionsRequest
-	(*PendingTransaction)(nil),                     // 75: bsvms.v1.PendingTransaction
-	(*PendingTransactionsResponse)(nil),            // 76: bsvms.v1.PendingTransactionsResponse
-	(*RebroadcastPendingTransactionsRequest)(nil),  // 77: bsvms.v1.RebroadcastPendingTransactionsRequest
-	(*RebroadcastPendingTransactionsResponse)(nil), // 78: bsvms.v1.RebroadcastPendingTransactionsResponse
-	(*StreamTransactionsRequest)(nil),              // 79: bsvms.v1.StreamTransactionsRequest
-	(*Block)(nil),                                  // 80: bsvms.v1.Block
-	(*BlockSpend)(nil),                             // 81: bsvms.v1.BlockSpend
-	(*StreamBlocksRequest)(nil),                    // 82: bsvms.v1.StreamBlocksRequest
-	(*Payment)(nil),                                // 83: bsvms.v1.Payment
-	(*StreamPaymentsRequest)(nil),                  // 84: bsvms.v1.StreamPaymentsRequest
-	(*OwnedOutput)(nil),                            // 85: bsvms.v1.OwnedOutput
-	(*SpentOutPoint)(nil),                          // 86: bsvms.v1.SpentOutPoint
-	(*WalletTransaction)(nil),                      // 87: bsvms.v1.WalletTransaction
-	(*StreamWalletTransactionsRequest)(nil),        // 88: bsvms.v1.StreamWalletTransactionsRequest
-	(*P2PTraffic)(nil),                             // 89: bsvms.v1.P2PTraffic
-	(*StreamP2PTrafficRequest)(nil),                // 90: bsvms.v1.StreamP2PTrafficRequest
-	(*Reject)(nil),                                 // 91: bsvms.v1.Reject
-	(*StreamRejectsRequest)(nil),                   // 92: bsvms.v1.StreamRejectsRequest
-	nil,                                            // 93: bsvms.v1.StatusResponse.PeerHeightsEntry
+	(*OutPoint)(nil),                               // 56: bsvms.v1.OutPoint
+	(*SpendToOutputsRequest)(nil),                  // 57: bsvms.v1.SpendToOutputsRequest
+	(*SpendDetail)(nil),                            // 58: bsvms.v1.SpendDetail
+	(*SpendDetailResponse)(nil),                    // 59: bsvms.v1.SpendDetailResponse
+	(*CustomInput)(nil),                            // 60: bsvms.v1.CustomInput
+	(*BroadcastCustomSpendRequest)(nil),            // 61: bsvms.v1.BroadcastCustomSpendRequest
+	(*P2PKHOutputRequest)(nil),                     // 62: bsvms.v1.P2PKHOutputRequest
+	(*OpReturnOutputRequest)(nil),                  // 63: bsvms.v1.OpReturnOutputRequest
+	(*AnyoneCanSpendOutputRequest)(nil),            // 64: bsvms.v1.AnyoneCanSpendOutputRequest
+	(*ParseTransactionRequest)(nil),                // 65: bsvms.v1.ParseTransactionRequest
+	(*Transaction)(nil),                            // 66: bsvms.v1.Transaction
+	(*TxInput)(nil),                                // 67: bsvms.v1.TxInput
+	(*TxOutput)(nil),                               // 68: bsvms.v1.TxOutput
+	(*BroadcastRawRequest)(nil),                    // 69: bsvms.v1.BroadcastRawRequest
+	(*BroadcastRawResponse)(nil),                   // 70: bsvms.v1.BroadcastRawResponse
+	(*ExecuteScriptRequest)(nil),                   // 71: bsvms.v1.ExecuteScriptRequest
+	(*ExecuteScriptResponse)(nil),                  // 72: bsvms.v1.ExecuteScriptResponse
+	(*DecodeOutputAddressRequest)(nil),             // 73: bsvms.v1.DecodeOutputAddressRequest
+	(*DecodeOutputAddressResponse)(nil),            // 74: bsvms.v1.DecodeOutputAddressResponse
+	(*PendingTransactionsRequest)(nil),             // 75: bsvms.v1.PendingTransactionsRequest
+	(*PendingTransaction)(nil),                     // 76: bsvms.v1.PendingTransaction
+	(*PendingTransactionsResponse)(nil),            // 77: bsvms.v1.PendingTransactionsResponse
+	(*RebroadcastPendingTransactionsRequest)(nil),  // 78: bsvms.v1.RebroadcastPendingTransactionsRequest
+	(*RebroadcastPendingTransactionsResponse)(nil), // 79: bsvms.v1.RebroadcastPendingTransactionsResponse
+	(*StreamTransactionsRequest)(nil),              // 80: bsvms.v1.StreamTransactionsRequest
+	(*Block)(nil),                                  // 81: bsvms.v1.Block
+	(*BlockSpend)(nil),                             // 82: bsvms.v1.BlockSpend
+	(*StreamBlocksRequest)(nil),                    // 83: bsvms.v1.StreamBlocksRequest
+	(*Payment)(nil),                                // 84: bsvms.v1.Payment
+	(*StreamPaymentsRequest)(nil),                  // 85: bsvms.v1.StreamPaymentsRequest
+	(*OwnedOutput)(nil),                            // 86: bsvms.v1.OwnedOutput
+	(*SpentOutPoint)(nil),                          // 87: bsvms.v1.SpentOutPoint
+	(*WalletTransaction)(nil),                      // 88: bsvms.v1.WalletTransaction
+	(*StreamWalletTransactionsRequest)(nil),        // 89: bsvms.v1.StreamWalletTransactionsRequest
+	(*P2PTraffic)(nil),                             // 90: bsvms.v1.P2PTraffic
+	(*StreamP2PTrafficRequest)(nil),                // 91: bsvms.v1.StreamP2PTrafficRequest
+	(*Reject)(nil),                                 // 92: bsvms.v1.Reject
+	(*StreamRejectsRequest)(nil),                   // 93: bsvms.v1.StreamRejectsRequest
+	(*TxStateRequest)(nil),                         // 94: bsvms.v1.TxStateRequest
+	(*TxStateResponse)(nil),                        // 95: bsvms.v1.TxStateResponse
+	(*AbandonTransactionRequest)(nil),              // 96: bsvms.v1.AbandonTransactionRequest
+	(*AbandonTransactionResponse)(nil),             // 97: bsvms.v1.AbandonTransactionResponse
+	(*ClearIgnoredOutpointsRequest)(nil),           // 98: bsvms.v1.ClearIgnoredOutpointsRequest
+	(*ClearIgnoredOutpointsResponse)(nil),          // 99: bsvms.v1.ClearIgnoredOutpointsResponse
+	(*OwnsScriptRequest)(nil),                      // 100: bsvms.v1.OwnsScriptRequest
+	(*OwnsScriptResponse)(nil),                     // 101: bsvms.v1.OwnsScriptResponse
+	(*VerifyTxSeenRequest)(nil),                    // 102: bsvms.v1.VerifyTxSeenRequest
+	(*VerifyTxSeenResponse)(nil),                   // 103: bsvms.v1.VerifyTxSeenResponse
+	(*WaitForTxRelayRequest)(nil),                  // 104: bsvms.v1.WaitForTxRelayRequest
+	(*WaitForTxRelayResponse)(nil),                 // 105: bsvms.v1.WaitForTxRelayResponse
+	(*RescanRequest)(nil),                          // 106: bsvms.v1.RescanRequest
+	(*RescanProgress)(nil),                         // 107: bsvms.v1.RescanProgress
+	(*RescanStats)(nil),                            // 108: bsvms.v1.RescanStats
+	(*RescanEvent)(nil),                            // 109: bsvms.v1.RescanEvent
+	(*GetIncompleteCursorRequest)(nil),             // 110: bsvms.v1.GetIncompleteCursorRequest
+	(*GetIncompleteCursorResponse)(nil),            // 111: bsvms.v1.GetIncompleteCursorResponse
+	nil,                                            // 112: bsvms.v1.StatusResponse.PeerHeightsEntry
 }
 var file_proto_bsvms_v1_bsvms_proto_depIdxs = []int32{
-	93, // 0: bsvms.v1.StatusResponse.peer_heights:type_name -> bsvms.v1.StatusResponse.PeerHeightsEntry
-	7,  // 1: bsvms.v1.ListWalletsResponse.wallets:type_name -> bsvms.v1.Wallet
-	7,  // 2: bsvms.v1.CreateWalletResponse.wallet:type_name -> bsvms.v1.Wallet
-	2,  // 3: bsvms.v1.CreateWalletResponse.tokens:type_name -> bsvms.v1.AuthTokens
-	7,  // 4: bsvms.v1.WalletResponse.wallet:type_name -> bsvms.v1.Wallet
-	2,  // 5: bsvms.v1.WalletResponse.tokens:type_name -> bsvms.v1.AuthTokens
-	16, // 6: bsvms.v1.AddressResponse.address:type_name -> bsvms.v1.DerivedAddress
-	16, // 7: bsvms.v1.BatchNewAddressesResponse.addresses:type_name -> bsvms.v1.DerivedAddress
-	29, // 8: bsvms.v1.ListUTXOsResponse.utxos:type_name -> bsvms.v1.UTXO
-	55, // 9: bsvms.v1.SpendToOutputsRequest.outputs:type_name -> bsvms.v1.OutputSpec
-	29, // 10: bsvms.v1.SpendDetail.spent_utxos:type_name -> bsvms.v1.UTXO
-	29, // 11: bsvms.v1.SpendDetail.change_utxo:type_name -> bsvms.v1.UTXO
-	57, // 12: bsvms.v1.SpendDetailResponse.detail:type_name -> bsvms.v1.SpendDetail
-	59, // 13: bsvms.v1.BroadcastCustomSpendRequest.inputs:type_name -> bsvms.v1.CustomInput
-	55, // 14: bsvms.v1.BroadcastCustomSpendRequest.outputs:type_name -> bsvms.v1.OutputSpec
-	66, // 15: bsvms.v1.Transaction.inputs:type_name -> bsvms.v1.TxInput
-	67, // 16: bsvms.v1.Transaction.outputs:type_name -> bsvms.v1.TxOutput
-	75, // 17: bsvms.v1.PendingTransactionsResponse.transactions:type_name -> bsvms.v1.PendingTransaction
-	81, // 18: bsvms.v1.Block.spends:type_name -> bsvms.v1.BlockSpend
-	65, // 19: bsvms.v1.WalletTransaction.transaction:type_name -> bsvms.v1.Transaction
-	85, // 20: bsvms.v1.WalletTransaction.owned:type_name -> bsvms.v1.OwnedOutput
-	86, // 21: bsvms.v1.WalletTransaction.spent:type_name -> bsvms.v1.SpentOutPoint
-	0,  // 22: bsvms.v1.BSVMS.Status:input_type -> bsvms.v1.StatusRequest
-	3,  // 23: bsvms.v1.BSVMS.RefreshToken:input_type -> bsvms.v1.RefreshTokenRequest
-	4,  // 24: bsvms.v1.BSVMS.ConnectPeer:input_type -> bsvms.v1.ConnectPeerRequest
-	8,  // 25: bsvms.v1.BSVMS.ListWallets:input_type -> bsvms.v1.ListWalletsRequest
-	10, // 26: bsvms.v1.BSVMS.CreateWallet:input_type -> bsvms.v1.CreateWalletRequest
-	12, // 27: bsvms.v1.BSVMS.RestoreWallet:input_type -> bsvms.v1.RestoreWalletRequest
-	14, // 28: bsvms.v1.BSVMS.GetWallet:input_type -> bsvms.v1.GetWalletRequest
-	15, // 29: bsvms.v1.BSVMS.NewAddress:input_type -> bsvms.v1.NewAddressRequest
-	18, // 30: bsvms.v1.BSVMS.BatchNewAddresses:input_type -> bsvms.v1.BatchNewAddressesRequest
-	20, // 31: bsvms.v1.BSVMS.DeriveAt:input_type -> bsvms.v1.DeriveAtRequest
-	21, // 32: bsvms.v1.BSVMS.PubKeyAt:input_type -> bsvms.v1.PubKeyAtRequest
-	23, // 33: bsvms.v1.BSVMS.SignHashAt:input_type -> bsvms.v1.SignHashAtRequest
-	25, // 34: bsvms.v1.BSVMS.NextIndex:input_type -> bsvms.v1.NextIndexRequest
-	27, // 35: bsvms.v1.BSVMS.Balance:input_type -> bsvms.v1.BalanceRequest
-	30, // 36: bsvms.v1.BSVMS.ListUTXOs:input_type -> bsvms.v1.ListUTXOsRequest
-	32, // 37: bsvms.v1.BSVMS.ImportUTXO:input_type -> bsvms.v1.ImportUTXORequest
-	34, // 38: bsvms.v1.BSVMS.ProcessRawTx:input_type -> bsvms.v1.ProcessRawTxRequest
-	36, // 39: bsvms.v1.BSVMS.ClearUTXOs:input_type -> bsvms.v1.ClearUTXOsRequest
-	38, // 40: bsvms.v1.BSVMS.ReloadFromStore:input_type -> bsvms.v1.ReloadFromStoreRequest
-	40, // 41: bsvms.v1.BSVMS.WipeWallet:input_type -> bsvms.v1.WipeWalletRequest
-	42, // 42: bsvms.v1.BSVMS.PruneUnknownUTXOs:input_type -> bsvms.v1.PruneUnknownUTXOsRequest
-	44, // 43: bsvms.v1.BSVMS.IgnoreOutpoint:input_type -> bsvms.v1.IgnoreOutpointRequest
-	46, // 44: bsvms.v1.BSVMS.IsOutpointIgnored:input_type -> bsvms.v1.IsOutpointIgnoredRequest
-	48, // 45: bsvms.v1.BSVMS.UntrackUTXO:input_type -> bsvms.v1.UntrackUTXORequest
-	50, // 46: bsvms.v1.BSVMS.CanCover:input_type -> bsvms.v1.CanCoverRequest
-	52, // 47: bsvms.v1.BSVMS.Send:input_type -> bsvms.v1.SendRequest
-	53, // 48: bsvms.v1.BSVMS.SendAll:input_type -> bsvms.v1.SendAllRequest
-	56, // 49: bsvms.v1.BSVMS.SpendToOutputs:input_type -> bsvms.v1.SpendToOutputsRequest
-	60, // 50: bsvms.v1.BSVMS.BroadcastCustomSpend:input_type -> bsvms.v1.BroadcastCustomSpendRequest
-	61, // 51: bsvms.v1.BSVMS.P2PKHOutput:input_type -> bsvms.v1.P2PKHOutputRequest
-	62, // 52: bsvms.v1.BSVMS.OpReturnOutput:input_type -> bsvms.v1.OpReturnOutputRequest
-	63, // 53: bsvms.v1.BSVMS.AnyoneCanSpendOutput:input_type -> bsvms.v1.AnyoneCanSpendOutputRequest
-	64, // 54: bsvms.v1.BSVMS.ParseTransaction:input_type -> bsvms.v1.ParseTransactionRequest
-	68, // 55: bsvms.v1.BSVMS.BroadcastRaw:input_type -> bsvms.v1.BroadcastRawRequest
-	70, // 56: bsvms.v1.BSVMS.ExecuteScript:input_type -> bsvms.v1.ExecuteScriptRequest
-	72, // 57: bsvms.v1.BSVMS.DecodeOutputAddress:input_type -> bsvms.v1.DecodeOutputAddressRequest
-	74, // 58: bsvms.v1.BSVMS.PendingTransactions:input_type -> bsvms.v1.PendingTransactionsRequest
-	77, // 59: bsvms.v1.BSVMS.RebroadcastPendingTransactions:input_type -> bsvms.v1.RebroadcastPendingTransactionsRequest
-	79, // 60: bsvms.v1.BSVMS.StreamTransactions:input_type -> bsvms.v1.StreamTransactionsRequest
-	82, // 61: bsvms.v1.BSVMS.StreamBlocks:input_type -> bsvms.v1.StreamBlocksRequest
-	84, // 62: bsvms.v1.BSVMS.StreamPayments:input_type -> bsvms.v1.StreamPaymentsRequest
-	88, // 63: bsvms.v1.BSVMS.StreamWalletTransactions:input_type -> bsvms.v1.StreamWalletTransactionsRequest
-	90, // 64: bsvms.v1.BSVMS.StreamP2PTraffic:input_type -> bsvms.v1.StreamP2PTrafficRequest
-	92, // 65: bsvms.v1.BSVMS.StreamRejects:input_type -> bsvms.v1.StreamRejectsRequest
-	1,  // 66: bsvms.v1.BSVMS.Status:output_type -> bsvms.v1.StatusResponse
-	2,  // 67: bsvms.v1.BSVMS.RefreshToken:output_type -> bsvms.v1.AuthTokens
-	5,  // 68: bsvms.v1.BSVMS.ConnectPeer:output_type -> bsvms.v1.ConnectPeerResponse
-	9,  // 69: bsvms.v1.BSVMS.ListWallets:output_type -> bsvms.v1.ListWalletsResponse
-	11, // 70: bsvms.v1.BSVMS.CreateWallet:output_type -> bsvms.v1.CreateWalletResponse
-	13, // 71: bsvms.v1.BSVMS.RestoreWallet:output_type -> bsvms.v1.WalletResponse
-	13, // 72: bsvms.v1.BSVMS.GetWallet:output_type -> bsvms.v1.WalletResponse
-	17, // 73: bsvms.v1.BSVMS.NewAddress:output_type -> bsvms.v1.AddressResponse
-	19, // 74: bsvms.v1.BSVMS.BatchNewAddresses:output_type -> bsvms.v1.BatchNewAddressesResponse
-	17, // 75: bsvms.v1.BSVMS.DeriveAt:output_type -> bsvms.v1.AddressResponse
-	22, // 76: bsvms.v1.BSVMS.PubKeyAt:output_type -> bsvms.v1.PubKeyAtResponse
-	24, // 77: bsvms.v1.BSVMS.SignHashAt:output_type -> bsvms.v1.SignHashAtResponse
-	26, // 78: bsvms.v1.BSVMS.NextIndex:output_type -> bsvms.v1.NextIndexResponse
-	28, // 79: bsvms.v1.BSVMS.Balance:output_type -> bsvms.v1.BalanceResponse
-	31, // 80: bsvms.v1.BSVMS.ListUTXOs:output_type -> bsvms.v1.ListUTXOsResponse
-	33, // 81: bsvms.v1.BSVMS.ImportUTXO:output_type -> bsvms.v1.ImportUTXOResponse
-	35, // 82: bsvms.v1.BSVMS.ProcessRawTx:output_type -> bsvms.v1.ProcessRawTxResponse
-	37, // 83: bsvms.v1.BSVMS.ClearUTXOs:output_type -> bsvms.v1.ClearUTXOsResponse
-	39, // 84: bsvms.v1.BSVMS.ReloadFromStore:output_type -> bsvms.v1.ReloadFromStoreResponse
-	41, // 85: bsvms.v1.BSVMS.WipeWallet:output_type -> bsvms.v1.WipeWalletResponse
-	43, // 86: bsvms.v1.BSVMS.PruneUnknownUTXOs:output_type -> bsvms.v1.PruneUnknownUTXOsResponse
-	45, // 87: bsvms.v1.BSVMS.IgnoreOutpoint:output_type -> bsvms.v1.IgnoreOutpointResponse
-	47, // 88: bsvms.v1.BSVMS.IsOutpointIgnored:output_type -> bsvms.v1.IsOutpointIgnoredResponse
-	49, // 89: bsvms.v1.BSVMS.UntrackUTXO:output_type -> bsvms.v1.UntrackUTXOResponse
-	51, // 90: bsvms.v1.BSVMS.CanCover:output_type -> bsvms.v1.CanCoverResponse
-	54, // 91: bsvms.v1.BSVMS.Send:output_type -> bsvms.v1.SpendResponse
-	54, // 92: bsvms.v1.BSVMS.SendAll:output_type -> bsvms.v1.SpendResponse
-	58, // 93: bsvms.v1.BSVMS.SpendToOutputs:output_type -> bsvms.v1.SpendDetailResponse
-	54, // 94: bsvms.v1.BSVMS.BroadcastCustomSpend:output_type -> bsvms.v1.SpendResponse
-	55, // 95: bsvms.v1.BSVMS.P2PKHOutput:output_type -> bsvms.v1.OutputSpec
-	55, // 96: bsvms.v1.BSVMS.OpReturnOutput:output_type -> bsvms.v1.OutputSpec
-	55, // 97: bsvms.v1.BSVMS.AnyoneCanSpendOutput:output_type -> bsvms.v1.OutputSpec
-	65, // 98: bsvms.v1.BSVMS.ParseTransaction:output_type -> bsvms.v1.Transaction
-	69, // 99: bsvms.v1.BSVMS.BroadcastRaw:output_type -> bsvms.v1.BroadcastRawResponse
-	71, // 100: bsvms.v1.BSVMS.ExecuteScript:output_type -> bsvms.v1.ExecuteScriptResponse
-	73, // 101: bsvms.v1.BSVMS.DecodeOutputAddress:output_type -> bsvms.v1.DecodeOutputAddressResponse
-	76, // 102: bsvms.v1.BSVMS.PendingTransactions:output_type -> bsvms.v1.PendingTransactionsResponse
-	78, // 103: bsvms.v1.BSVMS.RebroadcastPendingTransactions:output_type -> bsvms.v1.RebroadcastPendingTransactionsResponse
-	65, // 104: bsvms.v1.BSVMS.StreamTransactions:output_type -> bsvms.v1.Transaction
-	80, // 105: bsvms.v1.BSVMS.StreamBlocks:output_type -> bsvms.v1.Block
-	83, // 106: bsvms.v1.BSVMS.StreamPayments:output_type -> bsvms.v1.Payment
-	87, // 107: bsvms.v1.BSVMS.StreamWalletTransactions:output_type -> bsvms.v1.WalletTransaction
-	89, // 108: bsvms.v1.BSVMS.StreamP2PTraffic:output_type -> bsvms.v1.P2PTraffic
-	91, // 109: bsvms.v1.BSVMS.StreamRejects:output_type -> bsvms.v1.Reject
-	66, // [66:110] is the sub-list for method output_type
-	22, // [22:66] is the sub-list for method input_type
-	22, // [22:22] is the sub-list for extension type_name
-	22, // [22:22] is the sub-list for extension extendee
-	0,  // [0:22] is the sub-list for field type_name
+	112, // 0: bsvms.v1.StatusResponse.peer_heights:type_name -> bsvms.v1.StatusResponse.PeerHeightsEntry
+	7,   // 1: bsvms.v1.ListWalletsResponse.wallets:type_name -> bsvms.v1.Wallet
+	7,   // 2: bsvms.v1.CreateWalletResponse.wallet:type_name -> bsvms.v1.Wallet
+	2,   // 3: bsvms.v1.CreateWalletResponse.tokens:type_name -> bsvms.v1.AuthTokens
+	7,   // 4: bsvms.v1.WalletResponse.wallet:type_name -> bsvms.v1.Wallet
+	2,   // 5: bsvms.v1.WalletResponse.tokens:type_name -> bsvms.v1.AuthTokens
+	16,  // 6: bsvms.v1.AddressResponse.address:type_name -> bsvms.v1.DerivedAddress
+	16,  // 7: bsvms.v1.BatchNewAddressesResponse.addresses:type_name -> bsvms.v1.DerivedAddress
+	29,  // 8: bsvms.v1.ListUTXOsResponse.utxos:type_name -> bsvms.v1.UTXO
+	55,  // 9: bsvms.v1.SpendToOutputsRequest.outputs:type_name -> bsvms.v1.OutputSpec
+	56,  // 10: bsvms.v1.SpendToOutputsRequest.from_inputs:type_name -> bsvms.v1.OutPoint
+	29,  // 11: bsvms.v1.SpendDetail.spent_utxos:type_name -> bsvms.v1.UTXO
+	29,  // 12: bsvms.v1.SpendDetail.change_utxo:type_name -> bsvms.v1.UTXO
+	58,  // 13: bsvms.v1.SpendDetailResponse.detail:type_name -> bsvms.v1.SpendDetail
+	60,  // 14: bsvms.v1.BroadcastCustomSpendRequest.inputs:type_name -> bsvms.v1.CustomInput
+	55,  // 15: bsvms.v1.BroadcastCustomSpendRequest.outputs:type_name -> bsvms.v1.OutputSpec
+	67,  // 16: bsvms.v1.Transaction.inputs:type_name -> bsvms.v1.TxInput
+	68,  // 17: bsvms.v1.Transaction.outputs:type_name -> bsvms.v1.TxOutput
+	76,  // 18: bsvms.v1.PendingTransactionsResponse.transactions:type_name -> bsvms.v1.PendingTransaction
+	82,  // 19: bsvms.v1.Block.spends:type_name -> bsvms.v1.BlockSpend
+	66,  // 20: bsvms.v1.WalletTransaction.transaction:type_name -> bsvms.v1.Transaction
+	86,  // 21: bsvms.v1.WalletTransaction.owned:type_name -> bsvms.v1.OwnedOutput
+	87,  // 22: bsvms.v1.WalletTransaction.spent:type_name -> bsvms.v1.SpentOutPoint
+	107, // 23: bsvms.v1.RescanEvent.progress:type_name -> bsvms.v1.RescanProgress
+	108, // 24: bsvms.v1.RescanEvent.stats:type_name -> bsvms.v1.RescanStats
+	0,   // 25: bsvms.v1.BSVMS.Status:input_type -> bsvms.v1.StatusRequest
+	3,   // 26: bsvms.v1.BSVMS.RefreshToken:input_type -> bsvms.v1.RefreshTokenRequest
+	4,   // 27: bsvms.v1.BSVMS.ConnectPeer:input_type -> bsvms.v1.ConnectPeerRequest
+	8,   // 28: bsvms.v1.BSVMS.ListWallets:input_type -> bsvms.v1.ListWalletsRequest
+	10,  // 29: bsvms.v1.BSVMS.CreateWallet:input_type -> bsvms.v1.CreateWalletRequest
+	12,  // 30: bsvms.v1.BSVMS.RestoreWallet:input_type -> bsvms.v1.RestoreWalletRequest
+	14,  // 31: bsvms.v1.BSVMS.GetWallet:input_type -> bsvms.v1.GetWalletRequest
+	15,  // 32: bsvms.v1.BSVMS.NewAddress:input_type -> bsvms.v1.NewAddressRequest
+	18,  // 33: bsvms.v1.BSVMS.BatchNewAddresses:input_type -> bsvms.v1.BatchNewAddressesRequest
+	20,  // 34: bsvms.v1.BSVMS.DeriveAt:input_type -> bsvms.v1.DeriveAtRequest
+	21,  // 35: bsvms.v1.BSVMS.PubKeyAt:input_type -> bsvms.v1.PubKeyAtRequest
+	23,  // 36: bsvms.v1.BSVMS.SignHashAt:input_type -> bsvms.v1.SignHashAtRequest
+	25,  // 37: bsvms.v1.BSVMS.NextIndex:input_type -> bsvms.v1.NextIndexRequest
+	27,  // 38: bsvms.v1.BSVMS.Balance:input_type -> bsvms.v1.BalanceRequest
+	30,  // 39: bsvms.v1.BSVMS.ListUTXOs:input_type -> bsvms.v1.ListUTXOsRequest
+	32,  // 40: bsvms.v1.BSVMS.ImportUTXO:input_type -> bsvms.v1.ImportUTXORequest
+	34,  // 41: bsvms.v1.BSVMS.ProcessRawTx:input_type -> bsvms.v1.ProcessRawTxRequest
+	36,  // 42: bsvms.v1.BSVMS.ClearUTXOs:input_type -> bsvms.v1.ClearUTXOsRequest
+	38,  // 43: bsvms.v1.BSVMS.ReloadFromStore:input_type -> bsvms.v1.ReloadFromStoreRequest
+	40,  // 44: bsvms.v1.BSVMS.WipeWallet:input_type -> bsvms.v1.WipeWalletRequest
+	42,  // 45: bsvms.v1.BSVMS.PruneUnknownUTXOs:input_type -> bsvms.v1.PruneUnknownUTXOsRequest
+	44,  // 46: bsvms.v1.BSVMS.IgnoreOutpoint:input_type -> bsvms.v1.IgnoreOutpointRequest
+	46,  // 47: bsvms.v1.BSVMS.IsOutpointIgnored:input_type -> bsvms.v1.IsOutpointIgnoredRequest
+	48,  // 48: bsvms.v1.BSVMS.UntrackUTXO:input_type -> bsvms.v1.UntrackUTXORequest
+	50,  // 49: bsvms.v1.BSVMS.CanCover:input_type -> bsvms.v1.CanCoverRequest
+	52,  // 50: bsvms.v1.BSVMS.Send:input_type -> bsvms.v1.SendRequest
+	53,  // 51: bsvms.v1.BSVMS.SendAll:input_type -> bsvms.v1.SendAllRequest
+	57,  // 52: bsvms.v1.BSVMS.SpendToOutputs:input_type -> bsvms.v1.SpendToOutputsRequest
+	61,  // 53: bsvms.v1.BSVMS.BroadcastCustomSpend:input_type -> bsvms.v1.BroadcastCustomSpendRequest
+	62,  // 54: bsvms.v1.BSVMS.P2PKHOutput:input_type -> bsvms.v1.P2PKHOutputRequest
+	63,  // 55: bsvms.v1.BSVMS.OpReturnOutput:input_type -> bsvms.v1.OpReturnOutputRequest
+	64,  // 56: bsvms.v1.BSVMS.AnyoneCanSpendOutput:input_type -> bsvms.v1.AnyoneCanSpendOutputRequest
+	65,  // 57: bsvms.v1.BSVMS.ParseTransaction:input_type -> bsvms.v1.ParseTransactionRequest
+	69,  // 58: bsvms.v1.BSVMS.BroadcastRaw:input_type -> bsvms.v1.BroadcastRawRequest
+	71,  // 59: bsvms.v1.BSVMS.ExecuteScript:input_type -> bsvms.v1.ExecuteScriptRequest
+	73,  // 60: bsvms.v1.BSVMS.DecodeOutputAddress:input_type -> bsvms.v1.DecodeOutputAddressRequest
+	75,  // 61: bsvms.v1.BSVMS.PendingTransactions:input_type -> bsvms.v1.PendingTransactionsRequest
+	78,  // 62: bsvms.v1.BSVMS.RebroadcastPendingTransactions:input_type -> bsvms.v1.RebroadcastPendingTransactionsRequest
+	80,  // 63: bsvms.v1.BSVMS.StreamTransactions:input_type -> bsvms.v1.StreamTransactionsRequest
+	83,  // 64: bsvms.v1.BSVMS.StreamBlocks:input_type -> bsvms.v1.StreamBlocksRequest
+	85,  // 65: bsvms.v1.BSVMS.StreamPayments:input_type -> bsvms.v1.StreamPaymentsRequest
+	89,  // 66: bsvms.v1.BSVMS.StreamWalletTransactions:input_type -> bsvms.v1.StreamWalletTransactionsRequest
+	91,  // 67: bsvms.v1.BSVMS.StreamP2PTraffic:input_type -> bsvms.v1.StreamP2PTrafficRequest
+	93,  // 68: bsvms.v1.BSVMS.StreamRejects:input_type -> bsvms.v1.StreamRejectsRequest
+	94,  // 69: bsvms.v1.BSVMS.TxState:input_type -> bsvms.v1.TxStateRequest
+	96,  // 70: bsvms.v1.BSVMS.AbandonTransaction:input_type -> bsvms.v1.AbandonTransactionRequest
+	98,  // 71: bsvms.v1.BSVMS.ClearIgnoredOutpoints:input_type -> bsvms.v1.ClearIgnoredOutpointsRequest
+	100, // 72: bsvms.v1.BSVMS.OwnsScript:input_type -> bsvms.v1.OwnsScriptRequest
+	102, // 73: bsvms.v1.BSVMS.VerifyTxSeen:input_type -> bsvms.v1.VerifyTxSeenRequest
+	104, // 74: bsvms.v1.BSVMS.WaitForTxRelay:input_type -> bsvms.v1.WaitForTxRelayRequest
+	106, // 75: bsvms.v1.BSVMS.Rescan:input_type -> bsvms.v1.RescanRequest
+	110, // 76: bsvms.v1.BSVMS.GetIncompleteCursor:input_type -> bsvms.v1.GetIncompleteCursorRequest
+	1,   // 77: bsvms.v1.BSVMS.Status:output_type -> bsvms.v1.StatusResponse
+	2,   // 78: bsvms.v1.BSVMS.RefreshToken:output_type -> bsvms.v1.AuthTokens
+	5,   // 79: bsvms.v1.BSVMS.ConnectPeer:output_type -> bsvms.v1.ConnectPeerResponse
+	9,   // 80: bsvms.v1.BSVMS.ListWallets:output_type -> bsvms.v1.ListWalletsResponse
+	11,  // 81: bsvms.v1.BSVMS.CreateWallet:output_type -> bsvms.v1.CreateWalletResponse
+	13,  // 82: bsvms.v1.BSVMS.RestoreWallet:output_type -> bsvms.v1.WalletResponse
+	13,  // 83: bsvms.v1.BSVMS.GetWallet:output_type -> bsvms.v1.WalletResponse
+	17,  // 84: bsvms.v1.BSVMS.NewAddress:output_type -> bsvms.v1.AddressResponse
+	19,  // 85: bsvms.v1.BSVMS.BatchNewAddresses:output_type -> bsvms.v1.BatchNewAddressesResponse
+	17,  // 86: bsvms.v1.BSVMS.DeriveAt:output_type -> bsvms.v1.AddressResponse
+	22,  // 87: bsvms.v1.BSVMS.PubKeyAt:output_type -> bsvms.v1.PubKeyAtResponse
+	24,  // 88: bsvms.v1.BSVMS.SignHashAt:output_type -> bsvms.v1.SignHashAtResponse
+	26,  // 89: bsvms.v1.BSVMS.NextIndex:output_type -> bsvms.v1.NextIndexResponse
+	28,  // 90: bsvms.v1.BSVMS.Balance:output_type -> bsvms.v1.BalanceResponse
+	31,  // 91: bsvms.v1.BSVMS.ListUTXOs:output_type -> bsvms.v1.ListUTXOsResponse
+	33,  // 92: bsvms.v1.BSVMS.ImportUTXO:output_type -> bsvms.v1.ImportUTXOResponse
+	35,  // 93: bsvms.v1.BSVMS.ProcessRawTx:output_type -> bsvms.v1.ProcessRawTxResponse
+	37,  // 94: bsvms.v1.BSVMS.ClearUTXOs:output_type -> bsvms.v1.ClearUTXOsResponse
+	39,  // 95: bsvms.v1.BSVMS.ReloadFromStore:output_type -> bsvms.v1.ReloadFromStoreResponse
+	41,  // 96: bsvms.v1.BSVMS.WipeWallet:output_type -> bsvms.v1.WipeWalletResponse
+	43,  // 97: bsvms.v1.BSVMS.PruneUnknownUTXOs:output_type -> bsvms.v1.PruneUnknownUTXOsResponse
+	45,  // 98: bsvms.v1.BSVMS.IgnoreOutpoint:output_type -> bsvms.v1.IgnoreOutpointResponse
+	47,  // 99: bsvms.v1.BSVMS.IsOutpointIgnored:output_type -> bsvms.v1.IsOutpointIgnoredResponse
+	49,  // 100: bsvms.v1.BSVMS.UntrackUTXO:output_type -> bsvms.v1.UntrackUTXOResponse
+	51,  // 101: bsvms.v1.BSVMS.CanCover:output_type -> bsvms.v1.CanCoverResponse
+	54,  // 102: bsvms.v1.BSVMS.Send:output_type -> bsvms.v1.SpendResponse
+	54,  // 103: bsvms.v1.BSVMS.SendAll:output_type -> bsvms.v1.SpendResponse
+	59,  // 104: bsvms.v1.BSVMS.SpendToOutputs:output_type -> bsvms.v1.SpendDetailResponse
+	54,  // 105: bsvms.v1.BSVMS.BroadcastCustomSpend:output_type -> bsvms.v1.SpendResponse
+	55,  // 106: bsvms.v1.BSVMS.P2PKHOutput:output_type -> bsvms.v1.OutputSpec
+	55,  // 107: bsvms.v1.BSVMS.OpReturnOutput:output_type -> bsvms.v1.OutputSpec
+	55,  // 108: bsvms.v1.BSVMS.AnyoneCanSpendOutput:output_type -> bsvms.v1.OutputSpec
+	66,  // 109: bsvms.v1.BSVMS.ParseTransaction:output_type -> bsvms.v1.Transaction
+	70,  // 110: bsvms.v1.BSVMS.BroadcastRaw:output_type -> bsvms.v1.BroadcastRawResponse
+	72,  // 111: bsvms.v1.BSVMS.ExecuteScript:output_type -> bsvms.v1.ExecuteScriptResponse
+	74,  // 112: bsvms.v1.BSVMS.DecodeOutputAddress:output_type -> bsvms.v1.DecodeOutputAddressResponse
+	77,  // 113: bsvms.v1.BSVMS.PendingTransactions:output_type -> bsvms.v1.PendingTransactionsResponse
+	79,  // 114: bsvms.v1.BSVMS.RebroadcastPendingTransactions:output_type -> bsvms.v1.RebroadcastPendingTransactionsResponse
+	66,  // 115: bsvms.v1.BSVMS.StreamTransactions:output_type -> bsvms.v1.Transaction
+	81,  // 116: bsvms.v1.BSVMS.StreamBlocks:output_type -> bsvms.v1.Block
+	84,  // 117: bsvms.v1.BSVMS.StreamPayments:output_type -> bsvms.v1.Payment
+	88,  // 118: bsvms.v1.BSVMS.StreamWalletTransactions:output_type -> bsvms.v1.WalletTransaction
+	90,  // 119: bsvms.v1.BSVMS.StreamP2PTraffic:output_type -> bsvms.v1.P2PTraffic
+	92,  // 120: bsvms.v1.BSVMS.StreamRejects:output_type -> bsvms.v1.Reject
+	95,  // 121: bsvms.v1.BSVMS.TxState:output_type -> bsvms.v1.TxStateResponse
+	97,  // 122: bsvms.v1.BSVMS.AbandonTransaction:output_type -> bsvms.v1.AbandonTransactionResponse
+	99,  // 123: bsvms.v1.BSVMS.ClearIgnoredOutpoints:output_type -> bsvms.v1.ClearIgnoredOutpointsResponse
+	101, // 124: bsvms.v1.BSVMS.OwnsScript:output_type -> bsvms.v1.OwnsScriptResponse
+	103, // 125: bsvms.v1.BSVMS.VerifyTxSeen:output_type -> bsvms.v1.VerifyTxSeenResponse
+	105, // 126: bsvms.v1.BSVMS.WaitForTxRelay:output_type -> bsvms.v1.WaitForTxRelayResponse
+	109, // 127: bsvms.v1.BSVMS.Rescan:output_type -> bsvms.v1.RescanEvent
+	111, // 128: bsvms.v1.BSVMS.GetIncompleteCursor:output_type -> bsvms.v1.GetIncompleteCursorResponse
+	77,  // [77:129] is the sub-list for method output_type
+	25,  // [25:77] is the sub-list for method input_type
+	25,  // [25:25] is the sub-list for extension type_name
+	25,  // [25:25] is the sub-list for extension extendee
+	0,   // [0:25] is the sub-list for field type_name
 }
 
 func init() { file_proto_bsvms_v1_bsvms_proto_init() }
@@ -5862,14 +7375,18 @@ func file_proto_bsvms_v1_bsvms_proto_init() {
 	if File_proto_bsvms_v1_bsvms_proto != nil {
 		return
 	}
-	file_proto_bsvms_v1_bsvms_proto_msgTypes[57].OneofWrappers = []any{}
+	file_proto_bsvms_v1_bsvms_proto_msgTypes[58].OneofWrappers = []any{}
+	file_proto_bsvms_v1_bsvms_proto_msgTypes[109].OneofWrappers = []any{
+		(*RescanEvent_Progress)(nil),
+		(*RescanEvent_Stats)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_bsvms_v1_bsvms_proto_rawDesc), len(file_proto_bsvms_v1_bsvms_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   94,
+			NumMessages:   113,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -49,6 +49,14 @@ service BSVMS {
   rpc StreamWalletTransactions(StreamWalletTransactionsRequest) returns (stream WalletTransaction);
   rpc StreamP2PTraffic(StreamP2PTrafficRequest) returns (stream P2PTraffic);
   rpc StreamRejects(StreamRejectsRequest) returns (stream Reject);
+  rpc TxState(TxStateRequest) returns (TxStateResponse);
+  rpc AbandonTransaction(AbandonTransactionRequest) returns (AbandonTransactionResponse);
+  rpc ClearIgnoredOutpoints(ClearIgnoredOutpointsRequest) returns (ClearIgnoredOutpointsResponse);
+  rpc OwnsScript(OwnsScriptRequest) returns (OwnsScriptResponse);
+  rpc VerifyTxSeen(VerifyTxSeenRequest) returns (VerifyTxSeenResponse);
+  rpc WaitForTxRelay(WaitForTxRelayRequest) returns (WaitForTxRelayResponse);
+  rpc Rescan(RescanRequest) returns (stream RescanEvent);
+  rpc GetIncompleteCursor(GetIncompleteCursorRequest) returns (GetIncompleteCursorResponse);
 }
 
 message StatusRequest {}
@@ -60,6 +68,8 @@ message StatusResponse {
   int32 peer_count = 4;
   string data_dir = 5;
   map<string, int32> peer_heights = 6;
+  // Confirmations a coinbase output needs before it can be spent.
+  int32 coinbase_maturity = 7;
 }
 
 message AuthTokens {
@@ -95,6 +105,10 @@ message Wallet {
   uint32 next_external_index = 6;
   uint32 next_change_index = 7;
   string selector = 8;
+  // balance_satoshis counts immature coinbase; spendable_satoshis is what a
+  // send can draw on now. See BalanceResponse.
+  int64 spendable_satoshis = 9;
+  int64 immature_satoshis = 10;
 }
 
 message ListWalletsRequest {
@@ -209,8 +223,13 @@ message BalanceRequest {
 }
 
 message BalanceResponse {
+  // satoshis is the total balance, immature coinbase included.
   int64 satoshis = 1;
   double bsv = 2;
+  // spendable is satoshis minus immature; what a send can draw on now.
+  int64 spendable = 3;
+  // immature sits in coinbase outputs younger than coinbase_maturity.
+  int64 immature = 4;
 }
 
 message UTXO {
@@ -219,6 +238,9 @@ message UTXO {
   int64 value = 3;
   bytes script = 4;
   int32 height = 5;
+  // is_coinbase marks a mining reward: counted in balance but skipped by
+  // coin selection until coinbase_maturity confirmations have passed.
+  bool is_coinbase = 6;
 }
 
 message ListUTXOsRequest {
@@ -239,6 +261,9 @@ message ImportUTXORequest {
   bytes script = 6;
   int32 height = 7;
   bool force = 8;
+  // is_coinbase is honoured only with force; restoring a coinbase as an
+  // ordinary coin puts it back into coin selection before it is spendable.
+  bool is_coinbase = 9;
 }
 
 message ImportUTXOResponse {}
@@ -353,11 +378,19 @@ message OutputSpec {
   int64 value = 2;
 }
 
+message OutPoint {
+  string txid = 1;
+  uint32 vout = 2;
+}
+
 message SpendToOutputsRequest {
   string tenant_id = 1;
   string wallet_id = 2;
   repeated OutputSpec outputs = 3;
   bool ignore_fixed_outputs = 4;
+  // from_inputs restricts coin selection to these outpoints (plus change).
+  // Mutually exclusive with ignore_fixed_outputs.
+  repeated OutPoint from_inputs = 5;
 }
 
 message SpendDetail {
@@ -436,6 +469,9 @@ message ExecuteScriptRequest {
   bytes raw_tx = 3;
   int32 input_index = 4;
   int64 amount = 5;
+  // strict also applies the standard relay flags: a script that passes
+  // without it but fails with it is consensus-valid yet non-standard.
+  bool strict = 6;
 }
 
 message ExecuteScriptResponse {
@@ -479,6 +515,11 @@ message Block {
   int32 height = 2;
   repeated string txids = 3;
   repeated BlockSpend spends = 4;
+  // disconnected marks a block the chain abandoned in a reorganisation,
+  // emitted deepest first before its replacement is applied. txids and
+  // spends are empty on these; consumers keeping their own mined index
+  // should drop the block at this hash.
+  bool disconnected = 5;
 }
 
 message BlockSpend {
@@ -549,3 +590,154 @@ message Reject {
 }
 
 message StreamRejectsRequest {}
+
+message TxStateRequest {
+  string tenant_id = 1;
+  string wallet_id = 2;
+  string txid = 3;
+}
+
+message TxStateResponse {
+  // known is false when the wallet store has never seen this txid.
+  bool known = 1;
+  // height the tx confirmed at, or -1 while unconfirmed.
+  int32 height = 2;
+  bool confirmed = 3;
+  // conflicted means the tx can no longer confirm: a confirmed tx took one
+  // of its inputs, an ancestor is conflicted, or it was abandoned.
+  bool conflicted = 4;
+}
+
+message AbandonTransactionRequest {
+  string tenant_id = 1;
+  string wallet_id = 2;
+  string txid = 3;
+}
+
+message AbandonTransactionResponse {}
+
+message ClearIgnoredOutpointsRequest {
+  string tenant_id = 1;
+  string wallet_id = 2;
+}
+
+message ClearIgnoredOutpointsResponse {
+  int32 cleared = 1;
+}
+
+message OwnsScriptRequest {
+  string tenant_id = 1;
+  string wallet_id = 2;
+  bytes script_pub_key = 3;
+}
+
+message OwnsScriptResponse {
+  bool owned = 1;
+}
+
+message VerifyTxSeenRequest {
+  string txid = 1;
+  // peers_to_ask defaults to 1.
+  int32 peers_to_ask = 2;
+  // timeout_ms defaults to 10000.
+  int32 timeout_ms = 3;
+}
+
+message VerifyTxSeenResponse {
+  bool seen = 1;
+}
+
+message WaitForTxRelayRequest {
+  string txid = 1;
+  // timeout_ms defaults to 10000.
+  int32 timeout_ms = 2;
+}
+
+message WaitForTxRelayResponse {
+  bool relayed = 1;
+}
+
+// Rescan replays every block from a starting point back through a wallet, to
+// recover state after a restore or a long outage. It is a recovery path, not a
+// hot path: every block is pulled in full over P2P, which on mainnet can mean
+// hundreds of MB and minutes of wall time. One rescan runs per wallet at a
+// time. Cancelling the stream cancels the walk, and the blocks already
+// replayed stay applied.
+message RescanRequest {
+  string tenant_id = 1;
+  string wallet_id = 2;
+  // start_block_hash is display-order hex: the block to walk forward from,
+  // chosen to predate any activity the wallet may have missed.
+  string start_block_hash = 3;
+  // start_height is the absolute height of start_block_hash. Without it every
+  // replayed transaction is stamped unconfirmed and historical conflicts are
+  // not reconciled, so set it whenever the height is known.
+  int32 start_height = 4;
+  // max_blocks caps the walk. 0 uses the SDK default of 2000; unbounded walks
+  // are not offered here.
+  int32 max_blocks = 5;
+  int32 headers_timeout_ms = 6;
+  int32 block_timeout_ms = 7;
+  int32 max_consecutive_block_errors = 8;
+  // checkpoint_every flushes the address snapshot every N blocks. 0 disables.
+  int32 checkpoint_every = 9;
+  // gc_every returns allocator slack to the OS every N blocks. 0 disables.
+  int32 gc_every = 10;
+  // prefetch is how many block requests may be in flight at once. 0 uses one
+  // per connected peer, 1 restores serial fetching.
+  int32 prefetch = 11;
+  int64 prefetch_bytes = 12;
+  int64 stream_block_bytes = 13;
+}
+
+message RescanProgress {
+  string phase = 1;
+  string peer = 2;
+  int32 headers_seen = 3;
+  int32 batch_headers = 4;
+  int32 blocks_fetched = 5;
+  int32 txs_replayed = 6;
+  int32 errors = 7;
+  string block_hash = 8;
+  string message = 9;
+}
+
+message RescanStats {
+  int32 headers_seen = 1;
+  int32 blocks_fetched = 2;
+  int32 txs_replayed = 3;
+  // stopped_at is the last block whose transactions were replayed, in
+  // display-order hex, or empty if none were.
+  string stopped_at = 4;
+  int32 stopped_height = 5;
+  // peer_switches counts how often the walk moved to another peer to keep
+  // making progress.
+  int32 peer_switches = 6;
+  // errors are non-fatal: the walk carried on past them.
+  repeated string errors = 7;
+}
+
+// RescanEvent is a progress heartbeat while the walk runs, then exactly one
+// stats message as the final item on the stream.
+message RescanEvent {
+  oneof event {
+    RescanProgress progress = 1;
+    RescanStats stats = 2;
+  }
+}
+
+message GetIncompleteCursorRequest {
+  string tenant_id = 1;
+  string wallet_id = 2;
+}
+
+// GetIncompleteCursorResponse reports a block the wallet began applying but
+// never finished, which is how a crash mid-block shows up. Call it at startup:
+// when found is set, rescan from height - 1 to make the wallet whole.
+message GetIncompleteCursorResponse {
+  bool found = 1;
+  string block_hash = 2;
+  int32 height = 3;
+  int32 tx_done = 4;
+  int32 tx_total = 5;
+}

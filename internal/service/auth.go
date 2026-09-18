@@ -16,6 +16,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 type jwtClaims struct {
@@ -49,11 +51,30 @@ func (s *Service) UnaryAuthInterceptor() grpc.UnaryServerInterceptor {
 
 func (s *Service) StreamAuthInterceptor() grpc.StreamServerInterceptor {
 	return func(srv any, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-		if err := s.authorize(stream.Context(), info.FullMethod, nil); err != nil {
-			return err
-		}
-		return handler(srv, stream)
+		// The tenant check needs the request message, and a server-streaming
+		// RPC only produces it when the generated handler calls RecvMsg. Wrap
+		// the stream so the check runs there, before the handler body.
+		return handler(srv, &authServerStream{ServerStream: stream, svc: s, method: info.FullMethod})
 	}
+}
+
+// authServerStream authorizes the first message a stream receives.
+type authServerStream struct {
+	grpc.ServerStream
+	svc     *Service
+	method  string
+	checked bool
+}
+
+func (a *authServerStream) RecvMsg(m any) error {
+	if err := a.ServerStream.RecvMsg(m); err != nil {
+		return err
+	}
+	if a.checked {
+		return nil
+	}
+	a.checked = true
+	return a.svc.authorize(a.ServerStream.Context(), a.method, m)
 }
 
 func (s *Service) RefreshToken(ctx context.Context, req *bsvmspb.RefreshTokenRequest) (*bsvmspb.AuthTokens, error) {
@@ -84,9 +105,26 @@ func (s *Service) authorize(ctx context.Context, method string, req any) error {
 	if sub.Type != "access" {
 		return status.Error(codes.Unauthenticated, "access token required")
 	}
-	tenantID, walletID := tenantWalletFromRequest(req)
-	if tenantID == "" && walletID == "" {
+	// The closed-by-default rule governs this service's own methods. Anything
+	// else registered on the same server — server reflection, health — is past
+	// the token check above, which is all it ever had.
+	if !isBSVMSMethod(method) {
 		return nil
+	}
+	tenantID, walletID, scoped := tenantWalletFromRequest(req)
+	if !scoped {
+		if nodeScopedMethods[shortMethod(method)] {
+			return nil
+		}
+		// Either an unknown method, or one whose request should carry a
+		// tenant_id and does not. Refuse rather than wave it through.
+		return status.Error(codes.PermissionDenied, "method is not tenant-scoped")
+	}
+	// An empty tenant_id is not a wildcard. The streaming filters treat it as
+	// "match every tenant", so letting it past here would hand one tenant's
+	// token every other tenant's events.
+	if tenantID == "" {
+		return status.Error(codes.PermissionDenied, "tenant_id required")
 	}
 	if tenantID != sub.TenantID {
 		return status.Error(codes.PermissionDenied, "tenant mismatch")
@@ -98,8 +136,8 @@ func (s *Service) authorize(ctx context.Context, method string, req any) error {
 }
 
 func (s *Service) bootstrapAllowed(req any) bool {
-	tenantID, walletID := tenantWalletFromRequest(req)
-	if tenantID == "" || walletID == "" {
+	tenantID, walletID, scoped := tenantWalletFromRequest(req)
+	if !scoped || tenantID == "" || walletID == "" {
 		return false
 	}
 	if err := validateTenantWallet(tenantID, walletID); err != nil {
@@ -228,65 +266,72 @@ func randomID() string {
 	return base64.RawURLEncoding.EncodeToString(b[:])
 }
 
-func tenantWalletFromRequest(req any) (tenantID, walletID string) {
-	switch r := req.(type) {
-	case *bsvmspb.ListWalletsRequest:
-		return r.GetTenantId(), ""
-	case *bsvmspb.CreateWalletRequest:
-		return r.GetTenantId(), r.GetWalletId()
-	case *bsvmspb.RestoreWalletRequest:
-		return r.GetTenantId(), r.GetWalletId()
-	case *bsvmspb.GetWalletRequest:
-		return r.GetTenantId(), r.GetWalletId()
-	case *bsvmspb.NewAddressRequest:
-		return r.GetTenantId(), r.GetWalletId()
-	case *bsvmspb.BatchNewAddressesRequest:
-		return r.GetTenantId(), r.GetWalletId()
-	case *bsvmspb.DeriveAtRequest:
-		return r.GetTenantId(), r.GetWalletId()
-	case *bsvmspb.PubKeyAtRequest:
-		return r.GetTenantId(), r.GetWalletId()
-	case *bsvmspb.SignHashAtRequest:
-		return r.GetTenantId(), r.GetWalletId()
-	case *bsvmspb.NextIndexRequest:
-		return r.GetTenantId(), r.GetWalletId()
-	case *bsvmspb.BalanceRequest:
-		return r.GetTenantId(), r.GetWalletId()
-	case *bsvmspb.ListUTXOsRequest:
-		return r.GetTenantId(), r.GetWalletId()
-	case *bsvmspb.ImportUTXORequest:
-		return r.GetTenantId(), r.GetWalletId()
-	case *bsvmspb.ProcessRawTxRequest:
-		return r.GetTenantId(), r.GetWalletId()
-	case *bsvmspb.ClearUTXOsRequest:
-		return r.GetTenantId(), r.GetWalletId()
-	case *bsvmspb.ReloadFromStoreRequest:
-		return r.GetTenantId(), r.GetWalletId()
-	case *bsvmspb.WipeWalletRequest:
-		return r.GetTenantId(), r.GetWalletId()
-	case *bsvmspb.PruneUnknownUTXOsRequest:
-		return r.GetTenantId(), r.GetWalletId()
-	case *bsvmspb.IgnoreOutpointRequest:
-		return r.GetTenantId(), r.GetWalletId()
-	case *bsvmspb.IsOutpointIgnoredRequest:
-		return r.GetTenantId(), r.GetWalletId()
-	case *bsvmspb.UntrackUTXORequest:
-		return r.GetTenantId(), r.GetWalletId()
-	case *bsvmspb.CanCoverRequest:
-		return r.GetTenantId(), r.GetWalletId()
-	case *bsvmspb.SendRequest:
-		return r.GetTenantId(), r.GetWalletId()
-	case *bsvmspb.SendAllRequest:
-		return r.GetTenantId(), r.GetWalletId()
-	case *bsvmspb.SpendToOutputsRequest:
-		return r.GetTenantId(), r.GetWalletId()
-	case *bsvmspb.StreamPaymentsRequest:
-		return r.GetTenantId(), r.GetWalletId()
-	case *bsvmspb.StreamWalletTransactionsRequest:
-		return r.GetTenantId(), r.GetWalletId()
-	default:
-		return "", ""
+// nodeScopedMethods are the RPCs whose request carries no tenant_id because
+// they act on the node or on pure data rather than on a tenant's wallet.
+// Anything not listed here must carry a tenant_id, and is refused if it does
+// not — so a wallet-scoped RPC added later is closed by default instead of
+// silently unchecked.
+var nodeScopedMethods = map[string]bool{
+	"Status":                         true,
+	"RefreshToken":                   true,
+	"ConnectPeer":                    true,
+	"BroadcastCustomSpend":           true,
+	"P2PKHOutput":                    true,
+	"OpReturnOutput":                 true,
+	"AnyoneCanSpendOutput":           true,
+	"ParseTransaction":               true,
+	"BroadcastRaw":                   true,
+	"ExecuteScript":                  true,
+	"DecodeOutputAddress":            true,
+	"PendingTransactions":            true,
+	"RebroadcastPendingTransactions": true,
+	"StreamTransactions":             true,
+	"StreamBlocks":                   true,
+	"StreamP2PTraffic":               true,
+	"StreamRejects":                  true,
+	"VerifyTxSeen":                   true,
+	"WaitForTxRelay":                 true,
+}
+
+// bsvmsServicePrefix is "/bsvms.v1.BSVMS/", taken from the descriptor so it
+// cannot drift from the proto package.
+var bsvmsServicePrefix = "/" + string(bsvmspb.File_proto_bsvms_v1_bsvms_proto.Services().Get(0).FullName()) + "/"
+
+func isBSVMSMethod(fullMethod string) bool {
+	return strings.HasPrefix(fullMethod, bsvmsServicePrefix)
+}
+
+// shortMethod turns "/bsvms.v1.BSVMS/GetWallet" into "GetWallet".
+func shortMethod(fullMethod string) string {
+	if i := strings.LastIndex(fullMethod, "/"); i >= 0 {
+		return fullMethod[i+1:]
 	}
+	return fullMethod
+}
+
+// tenantWalletFromRequest reads the tenant_id/wallet_id a request carries.
+// scoped reports whether the message declares a tenant_id at all; reading the
+// descriptor rather than naming each request type means a new wallet-scoped
+// RPC is covered the moment its proto has the field.
+func tenantWalletFromRequest(req any) (tenantID, walletID string, scoped bool) {
+	msg, ok := req.(proto.Message)
+	if !ok || msg == nil {
+		return "", "", false
+	}
+	m := msg.ProtoReflect()
+	if !m.IsValid() {
+		return "", "", false
+	}
+	fields := m.Descriptor().Fields()
+	tenantField := fields.ByName("tenant_id")
+	if tenantField == nil || tenantField.Kind() != protoreflect.StringKind {
+		return "", "", false
+	}
+	tenantID = m.Get(tenantField).String()
+	if walletField := fields.ByName("wallet_id"); walletField != nil && walletField.Kind() == protoreflect.StringKind {
+		walletID = m.Get(walletField).String()
+	}
+	return tenantID, walletID, true
 }
 
 func authContext(token string) context.Context {

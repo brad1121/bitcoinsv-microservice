@@ -13,9 +13,12 @@ import (
 
 	bsv "github.com/brad1121/bitcoinsv-sdk-go/sdk"
 	bsvmspb "github.com/brad1121/bsvms/gen/bsvms/v1"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/dynamicpb"
 )
 
 const validTxHex = "0100000001a15d57094aa7a21a28cb20b59aab8fc7d1149a3bdbcddba9c301e9383dcdde9f000000006a4730440220aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0220bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb012102ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccffffffff0280f0fa02000000001976a914dededededededededededededededededededededede88ac400d0300000000001976a9146b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b88ac00000000"
@@ -104,8 +107,11 @@ func TestStatusAndPeerValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.GetNetwork() != "regtest" || got.GetChainHeight() != -1 || got.GetDataDir() == "" {
+	if got.GetNetwork() != "regtest" || got.GetChainHeight() != 0 || got.GetDataDir() == "" {
 		t.Fatalf("status = %+v", got)
+	}
+	if got.GetCoinbaseMaturity() != 100 {
+		t.Fatalf("coinbase_maturity = %d, want 100", got.GetCoinbaseMaturity())
 	}
 	if _, err := env.svc.ConnectPeer(env.ctx, &bsvmspb.ConnectPeerRequest{}); status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("ConnectPeer empty code = %v, want InvalidArgument", status.Code(err))
@@ -820,4 +826,467 @@ func waitSubscribers[T any](t *testing.T, b *broker[T], want int) {
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatalf("subscribers did not reach %d", want)
+}
+
+func TestCoinbaseMaturitySplitsBalanceAndSurvivesForcedImport(t *testing.T) {
+	env := newTestEnv(t, true)
+	createWallet(t, env, "tenant1", "wallet1")
+	addr := mustNewAddress(t, env, "tenant1", "wallet1")
+	script := mustP2PKHScript(t, env, addr, 50_000)
+
+	// A coinbase and an ordinary coin at the same height: the wallet's tip is
+	// that height, so the reward is one confirmation deep and cannot be spent.
+	if _, err := env.svc.ImportUTXO(env.ctx, &bsvmspb.ImportUTXORequest{
+		TenantId: "tenant1", WalletId: "wallet1", Txid: txidHex(300), Vout: 0,
+		Value: 50_000, Script: script, Height: 100, Force: true, IsCoinbase: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.svc.ImportUTXO(env.ctx, &bsvmspb.ImportUTXORequest{
+		TenantId: "tenant1", WalletId: "wallet1", Txid: txidHex(301), Vout: 0,
+		Value: 10_000, Script: script, Height: 100, Force: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	bal, err := env.svc.Balance(env.ctx, &bsvmspb.BalanceRequest{TenantId: "tenant1", WalletId: "wallet1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bal.GetSatoshis() != 60_000 {
+		t.Fatalf("satoshis = %d, want 60000", bal.GetSatoshis())
+	}
+	if bal.GetImmature() != 50_000 {
+		t.Fatalf("immature = %d, want 50000", bal.GetImmature())
+	}
+	if bal.GetSpendable() != 10_000 {
+		t.Fatalf("spendable = %d, want 10000", bal.GetSpendable())
+	}
+
+	// The flag has to survive the round trip, or a restore puts an unspendable
+	// coin back into coin selection.
+	utxos, err := env.svc.ListUTXOs(env.ctx, &bsvmspb.ListUTXOsRequest{TenantId: "tenant1", WalletId: "wallet1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawCoinbase, sawOrdinary bool
+	for _, u := range utxos.GetUtxos() {
+		switch u.GetTxid() {
+		case txidHex(300):
+			sawCoinbase = u.GetIsCoinbase()
+		case txidHex(301):
+			sawOrdinary = !u.GetIsCoinbase()
+		}
+	}
+	if !sawCoinbase || !sawOrdinary {
+		t.Fatalf("is_coinbase not carried through: %+v", utxos.GetUtxos())
+	}
+
+	// Push the tip past the maturity window and the reward becomes spendable.
+	if _, err := env.svc.ImportUTXO(env.ctx, &bsvmspb.ImportUTXORequest{
+		TenantId: "tenant1", WalletId: "wallet1", Txid: txidHex(302), Vout: 0,
+		Value: 1, Script: script, Height: 500, Force: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	bal, err = env.svc.Balance(env.ctx, &bsvmspb.BalanceRequest{TenantId: "tenant1", WalletId: "wallet1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bal.GetImmature() != 0 || bal.GetSpendable() != 60_001 {
+		t.Fatalf("after maturity: immature = %d spendable = %d", bal.GetImmature(), bal.GetSpendable())
+	}
+}
+
+func TestSpendFromNamedInputs(t *testing.T) {
+	env := newTestEnv(t, true)
+	createWallet(t, env, "tenant1", "wallet1")
+	addr := mustNewAddress(t, env, "tenant1", "wallet1")
+	script := mustP2PKHScript(t, env, addr, 200_000)
+	for i := 0; i < 3; i++ {
+		if _, err := env.svc.ImportUTXO(env.ctx, &bsvmspb.ImportUTXORequest{
+			TenantId: "tenant1", WalletId: "wallet1", Txid: txidHex(400 + i), Vout: 0,
+			Value: 200_000, Script: script, Height: 100, Force: true,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	detail, err := env.svc.SpendToOutputs(env.ctx, &bsvmspb.SpendToOutputsRequest{
+		TenantId:   "tenant1",
+		WalletId:   "wallet1",
+		Outputs:    []*bsvmspb.OutputSpec{{Script: []byte{0x51}, Value: 1000}},
+		FromInputs: []*bsvmspb.OutPoint{{Txid: txidHex(401), Vout: 0}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	spent := detail.GetDetail().GetSpentUtxos()
+	if len(spent) != 1 || spent[0].GetTxid() != txidHex(401) {
+		t.Fatalf("spent = %+v, want only %s", spent, txidHex(401))
+	}
+
+	if _, err := env.svc.SpendToOutputs(env.ctx, &bsvmspb.SpendToOutputsRequest{
+		TenantId:           "tenant1",
+		WalletId:           "wallet1",
+		Outputs:            []*bsvmspb.OutputSpec{{Script: []byte{0x51}, Value: 1000}},
+		FromInputs:         []*bsvmspb.OutPoint{{Txid: txidHex(400), Vout: 0}},
+		IgnoreFixedOutputs: true,
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("from_inputs + ignore_fixed code = %v, want InvalidArgument", status.Code(err))
+	}
+	if _, err := env.svc.SpendToOutputs(env.ctx, &bsvmspb.SpendToOutputsRequest{
+		TenantId:   "tenant1",
+		WalletId:   "wallet1",
+		Outputs:    []*bsvmspb.OutputSpec{{Script: []byte{0x51}, Value: 1000}},
+		FromInputs: []*bsvmspb.OutPoint{{Txid: "bad", Vout: 0}},
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("bad from_inputs txid code = %v, want InvalidArgument", status.Code(err))
+	}
+}
+
+func TestTxStateAbandonOwnsScriptAndClearIgnored(t *testing.T) {
+	env := newTestEnv(t, true)
+	createWallet(t, env, "tenant1", "wallet1")
+	addr := mustNewAddress(t, env, "tenant1", "wallet1")
+	script := mustP2PKHScript(t, env, addr, 50_000)
+
+	state, err := env.svc.TxState(env.ctx, &bsvmspb.TxStateRequest{TenantId: "tenant1", WalletId: "wallet1", Txid: txidHex(600)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.GetKnown() || state.GetHeight() != -1 {
+		t.Fatalf("unknown TxState = %+v", state)
+	}
+	if _, err := env.svc.TxState(env.ctx, &bsvmspb.TxStateRequest{TenantId: "tenant1", WalletId: "wallet1", Txid: "bad"}); status.Code(err) != codes.Internal {
+		t.Fatalf("bad TxState txid code = %v, want Internal", status.Code(err))
+	}
+	if _, err := env.svc.AbandonTransaction(env.ctx, &bsvmspb.AbandonTransactionRequest{TenantId: "tenant1", WalletId: "wallet1", Txid: txidHex(600)}); status.Code(err) != codes.Internal {
+		t.Fatalf("abandon unknown tx code = %v, want Internal", status.Code(err))
+	}
+
+	owns, err := env.svc.OwnsScript(env.ctx, &bsvmspb.OwnsScriptRequest{TenantId: "tenant1", WalletId: "wallet1", ScriptPubKey: script})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !owns.GetOwned() {
+		t.Fatal("wallet does not claim its own script")
+	}
+	foreign, err := env.svc.OwnsScript(env.ctx, &bsvmspb.OwnsScriptRequest{TenantId: "tenant1", WalletId: "wallet1", ScriptPubKey: []byte{0x51}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if foreign.GetOwned() {
+		t.Fatal("wallet claims a script it does not own")
+	}
+
+	if _, err := env.svc.IgnoreOutpoint(env.ctx, &bsvmspb.IgnoreOutpointRequest{TenantId: "tenant1", WalletId: "wallet1", Txid: txidHex(601), Vout: 0}); err != nil {
+		t.Fatal(err)
+	}
+	cleared, err := env.svc.ClearIgnoredOutpoints(env.ctx, &bsvmspb.ClearIgnoredOutpointsRequest{TenantId: "tenant1", WalletId: "wallet1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cleared.GetCleared() != 1 {
+		t.Fatalf("cleared = %d, want 1", cleared.GetCleared())
+	}
+	ignored, err := env.svc.IsOutpointIgnored(env.ctx, &bsvmspb.IsOutpointIgnoredRequest{TenantId: "tenant1", WalletId: "wallet1", Txid: txidHex(601), Vout: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ignored.GetIgnored() {
+		t.Fatal("outpoint still ignored after clear")
+	}
+}
+
+func TestExecuteScriptStrictRejectsNonStandard(t *testing.T) {
+	env := newTestEnv(t, true)
+	// OP_1 OP_NOP1 leaves a true stack and is consensus-valid, but an
+	// upgradable NOP is non-standard, so a node would relay neither it nor a
+	// spend of it. The strict pass has to say so.
+	spk := []byte{0x51, 0xb0}
+	lenient, err := env.svc.ExecuteScript(env.ctx, &bsvmspb.ExecuteScriptRequest{ScriptPubKey: spk})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !lenient.GetOk() {
+		t.Fatalf("lenient ExecuteScript = %+v, want ok", lenient)
+	}
+	strict, err := env.svc.ExecuteScript(env.ctx, &bsvmspb.ExecuteScriptRequest{ScriptPubKey: spk, Strict: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strict.GetOk() {
+		t.Fatalf("strict ExecuteScript accepted a non-standard script")
+	}
+	if strict.GetError() == "" {
+		t.Fatal("strict failure carries no reason")
+	}
+}
+
+func TestEveryRPCIsEitherTenantScopedOrExplicitlyNodeScoped(t *testing.T) {
+	// Authorization is closed by default: a request with no tenant_id is only
+	// allowed when its method is on the node-scoped list. This walks the whole
+	// service so a newly added RPC has to be classified deliberately rather
+	// than defaulting to unchecked.
+	sd := bsvmspb.File_proto_bsvms_v1_bsvms_proto.Services().Get(0)
+	for i := 0; i < sd.Methods().Len(); i++ {
+		m := sd.Methods().Get(i)
+		name := string(m.Name())
+		hasTenant := m.Input().Fields().ByName("tenant_id") != nil
+		switch {
+		case hasTenant && nodeScopedMethods[name]:
+			t.Errorf("%s carries tenant_id but is listed as node-scoped", name)
+		case !hasTenant && !nodeScopedMethods[name]:
+			t.Errorf("%s has no tenant_id and is not on the node-scoped list, so it would be refused", name)
+		}
+		// The reflective lookup has to agree with the descriptor.
+		req := dynamicpb.NewMessage(m.Input()).Interface()
+		_, _, scoped := tenantWalletFromRequest(req)
+		if scoped != hasTenant {
+			t.Errorf("%s: tenantWalletFromRequest scoped = %v, want %v", name, scoped, hasTenant)
+		}
+	}
+}
+
+func TestEmptyTenantIsNotAWildcard(t *testing.T) {
+	ctx := context.Background()
+	svc, err := NewWithOptions(ctx, bsv.New(bsv.Regtest), t.TempDir(), Options{
+		AuthEnabled: true,
+		JWTSecret:   bytesOf('j', 32),
+		DataKey:     bytesOf('d', 32),
+		AccessTTL:   time.Hour,
+		RefreshTTL:  2 * time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer svc.Close()
+	created, err := svc.CreateWallet(ctx, &bsvmspb.CreateWalletRequest{TenantId: "alice", WalletId: "main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	accessCtx := authContext(created.GetTokens().GetAccessToken())
+
+	// matches() treats an empty tenant as "every tenant", so an empty request
+	// on a stream would otherwise hand alice everyone else's events.
+	for _, tc := range []struct {
+		method string
+		req    any
+	}{
+		{"/bsvms.v1.BSVMS/StreamPayments", &bsvmspb.StreamPaymentsRequest{}},
+		{"/bsvms.v1.BSVMS/StreamWalletTransactions", &bsvmspb.StreamWalletTransactionsRequest{}},
+		{"/bsvms.v1.BSVMS/GetWallet", &bsvmspb.GetWalletRequest{}},
+		{"/bsvms.v1.BSVMS/Balance", &bsvmspb.BalanceRequest{WalletId: "main"}},
+	} {
+		if err := svc.authorize(accessCtx, tc.method, tc.req); status.Code(err) != codes.PermissionDenied {
+			t.Errorf("%s empty tenant code = %v, want PermissionDenied", tc.method, status.Code(err))
+		}
+	}
+
+	// A nil request can no longer stand in for a stream: the interceptor now
+	// authorizes the real message on RecvMsg.
+	if err := svc.authorize(accessCtx, "/bsvms.v1.BSVMS/StreamPayments", nil); status.Code(err) != codes.PermissionDenied {
+		t.Errorf("nil stream req code = %v, want PermissionDenied", status.Code(err))
+	}
+	// Alice's own scope still works, and node-scoped RPCs stay reachable.
+	if err := svc.authorize(accessCtx, "/bsvms.v1.BSVMS/StreamPayments", &bsvmspb.StreamPaymentsRequest{TenantId: "alice", WalletId: "main"}); err != nil {
+		t.Errorf("alice own stream: %v", err)
+	}
+	if err := svc.authorize(accessCtx, "/bsvms.v1.BSVMS/Status", &bsvmspb.StatusRequest{}); err != nil {
+		t.Errorf("node-scoped Status: %v", err)
+	}
+	if err := svc.authorize(accessCtx, "/bsvms.v1.BSVMS/StreamPayments", &bsvmspb.StreamPaymentsRequest{TenantId: "bob", WalletId: "main"}); status.Code(err) != codes.PermissionDenied {
+		t.Errorf("alice streaming bob code = %v, want PermissionDenied", status.Code(err))
+	}
+}
+
+func TestGetIncompleteCursorOnCleanWallet(t *testing.T) {
+	env := newTestEnv(t, true)
+	createWallet(t, env, "tenant1", "wallet1")
+	cursor, err := env.svc.GetIncompleteCursor(env.ctx, &bsvmspb.GetIncompleteCursorRequest{TenantId: "tenant1", WalletId: "wallet1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cursor.GetFound() {
+		t.Fatalf("clean wallet reports an unfinished block: %+v", cursor)
+	}
+	if _, err := env.svc.GetIncompleteCursor(env.ctx, &bsvmspb.GetIncompleteCursorRequest{TenantId: "tenant1", WalletId: "missing"}); status.Code(err) != codes.NotFound {
+		t.Fatalf("missing wallet code = %v, want NotFound", status.Code(err))
+	}
+}
+
+func TestRescanValidationAndSingleFlight(t *testing.T) {
+	env := newTestEnv(t, true)
+	createWallet(t, env, "tenant1", "wallet1")
+
+	rescan := func(req *bsvmspb.RescanRequest) error {
+		ctx, cancel := context.WithCancel(env.ctx)
+		defer cancel()
+		stream := newTestStream[bsvmspb.RescanEvent](ctx, cancel, 0)
+		return env.svc.Rescan(req, stream)
+	}
+
+	if err := rescan(&bsvmspb.RescanRequest{TenantId: "tenant1", WalletId: "wallet1"}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("empty start hash code = %v, want InvalidArgument", status.Code(err))
+	}
+	if err := rescan(&bsvmspb.RescanRequest{TenantId: "tenant1", WalletId: "wallet1", StartBlockHash: "nothex"}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("bad start hash code = %v, want InvalidArgument", status.Code(err))
+	}
+	if err := rescan(&bsvmspb.RescanRequest{TenantId: "tenant1", WalletId: "missing", StartBlockHash: txidHex(1)}); status.Code(err) != codes.NotFound {
+		t.Fatalf("missing wallet code = %v, want NotFound", status.Code(err))
+	}
+
+	// Two walks over one wallet would race to apply the same blocks.
+	tw, err := env.svc.wallet(env.ctx, "tenant1", "wallet1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !env.svc.beginRescan(tw) {
+		t.Fatal("first beginRescan refused")
+	}
+	if err := rescan(&bsvmspb.RescanRequest{TenantId: "tenant1", WalletId: "wallet1", StartBlockHash: txidHex(1)}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("concurrent rescan code = %v, want FailedPrecondition", status.Code(err))
+	}
+	env.svc.endRescan(tw)
+	// The guard is released again once the walk is done.
+	if !env.svc.beginRescan(tw) {
+		t.Fatal("guard not released")
+	}
+	env.svc.endRescan(tw)
+}
+
+func TestRescanWithoutPeersFailsAndReleasesTheWallet(t *testing.T) {
+	env := newTestEnv(t, true)
+	createWallet(t, env, "tenant1", "wallet1")
+	ctx, cancel := context.WithTimeout(env.ctx, 10*time.Second)
+	defer cancel()
+	stream := newTestStream[bsvmspb.RescanEvent](ctx, cancel, 0)
+	err := env.svc.Rescan(&bsvmspb.RescanRequest{
+		TenantId: "tenant1", WalletId: "wallet1", StartBlockHash: txidHex(1), MaxBlocks: 1,
+	}, stream)
+	if err == nil {
+		t.Fatal("rescan with no peers returned no error")
+	}
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("no-peer rescan code = %v, want Internal", status.Code(err))
+	}
+	// The per-wallet guard must not be left held by a failed walk.
+	tw, werr := env.svc.wallet(env.ctx, "tenant1", "wallet1")
+	if werr != nil {
+		t.Fatal(werr)
+	}
+	if !env.svc.beginRescan(tw) {
+		t.Fatal("failed rescan left the wallet locked")
+	}
+	env.svc.endRescan(tw)
+}
+
+func TestBlockHashHexIsDisplayOrder(t *testing.T) {
+	// Round-trips against the SDK's display-order parser.
+	want := txidHex(7)
+	internal, err := bsv.TxIDFromHex(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := blockHashHex(internal); got != want {
+		t.Fatalf("blockHashHex = %s, want %s", got, want)
+	}
+}
+
+// fakeServerStream feeds one request message to the interceptor under test.
+type fakeServerStream struct {
+	ctx  context.Context
+	next any
+}
+
+func (f *fakeServerStream) SetHeader(metadata.MD) error  { return nil }
+func (f *fakeServerStream) SendHeader(metadata.MD) error { return nil }
+func (f *fakeServerStream) SetTrailer(metadata.MD)       {}
+func (f *fakeServerStream) Context() context.Context     { return f.ctx }
+func (f *fakeServerStream) SendMsg(any) error            { return nil }
+func (f *fakeServerStream) RecvMsg(m any) error {
+	src, ok := f.next.(proto.Message)
+	if !ok {
+		return errors.New("no message queued")
+	}
+	proto.Merge(m.(proto.Message), src)
+	return nil
+}
+
+func TestStreamAuthInterceptorChecksTheRealRequest(t *testing.T) {
+	ctx := context.Background()
+	svc, err := NewWithOptions(ctx, bsv.New(bsv.Regtest), t.TempDir(), Options{
+		AuthEnabled: true,
+		JWTSecret:   bytesOf('j', 32),
+		DataKey:     bytesOf('d', 32),
+		AccessTTL:   time.Hour,
+		RefreshTTL:  2 * time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer svc.Close()
+	created, err := svc.CreateWallet(ctx, &bsvmspb.CreateWalletRequest{TenantId: "alice", WalletId: "main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	accessCtx := authContext(created.GetTokens().GetAccessToken())
+	interceptor := svc.StreamAuthInterceptor()
+
+	// The handler stands in for the generated one: it receives the request,
+	// which is where the tenant check now happens.
+	run := func(req proto.Message) error {
+		stream := &fakeServerStream{ctx: accessCtx, next: req}
+		info := &grpc.StreamServerInfo{FullMethod: "/bsvms.v1.BSVMS/StreamPayments"}
+		return interceptor(nil, stream, info, func(_ any, s grpc.ServerStream) error {
+			return s.RecvMsg(&bsvmspb.StreamPaymentsRequest{})
+		})
+	}
+
+	if err := run(&bsvmspb.StreamPaymentsRequest{TenantId: "alice", WalletId: "main"}); err != nil {
+		t.Fatalf("alice own stream: %v", err)
+	}
+	if err := run(&bsvmspb.StreamPaymentsRequest{TenantId: "bob", WalletId: "main"}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("alice streaming bob code = %v, want PermissionDenied", status.Code(err))
+	}
+	// The empty request is the one that used to wildcard across every tenant.
+	if err := run(&bsvmspb.StreamPaymentsRequest{}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("empty stream request code = %v, want PermissionDenied", status.Code(err))
+	}
+}
+
+func TestNonBSVMSMethodsAreNotSubjectToTenantScoping(t *testing.T) {
+	// Server reflection and health run on the same server but carry no
+	// tenant_id. Closing them by default would break grpcurl against an
+	// auth-enabled server for clients that do hold a valid token.
+	ctx := context.Background()
+	svc, err := NewWithOptions(ctx, bsv.New(bsv.Regtest), t.TempDir(), Options{
+		AuthEnabled: true,
+		JWTSecret:   bytesOf('j', 32),
+		DataKey:     bytesOf('d', 32),
+		AccessTTL:   time.Hour,
+		RefreshTTL:  2 * time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer svc.Close()
+	created, err := svc.CreateWallet(ctx, &bsvmspb.CreateWalletRequest{TenantId: "alice", WalletId: "main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	accessCtx := authContext(created.GetTokens().GetAccessToken())
+
+	const reflectionMethod = "/grpc.reflection.v1.ServerReflection/ServerReflectionInfo"
+	if err := svc.authorize(accessCtx, reflectionMethod, nil); err != nil {
+		t.Fatalf("reflection with a valid token: %v", err)
+	}
+	// It still needs a token: the rule relaxed here is tenant scoping, not
+	// authentication.
+	if err := svc.authorize(ctx, reflectionMethod, nil); status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("reflection without token code = %v, want Unauthenticated", status.Code(err))
+	}
+	if !isBSVMSMethod("/bsvms.v1.BSVMS/Status") || isBSVMSMethod(reflectionMethod) {
+		t.Fatal("isBSVMSMethod misclassifies")
+	}
 }
