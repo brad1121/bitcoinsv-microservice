@@ -61,6 +61,8 @@ type tenantWallet struct {
 	meta  walletMeta
 	w     *bsv.Wallet
 	store *walletsqlite.Store
+	// rescanning serialises Rescan per wallet; guarded by Service.mu.
+	rescanning bool
 }
 
 func New(ctx context.Context, node *bsv.Node, dataDir string) (*Service, error) {
@@ -83,6 +85,12 @@ func NewWithOptions(ctx context.Context, node *bsv.Node, dataDir string, opts Op
 		walletTxBroker: newBroker[*bsvmspb.WalletTransaction](),
 		trafficBroker:  newBroker[*bsvmspb.P2PTraffic](),
 		rejectBroker:   newBroker[*bsvmspb.Reject](),
+	}
+	if resolved.BroadcastFanout > 0 {
+		node.SetBroadcastFanout(resolved.BroadcastFanout)
+	}
+	if resolved.DisablePendingTxTracking {
+		node.SetPendingTxTracking(false)
 	}
 	if err := os.MkdirAll(s.walletDir(), 0o700); err != nil {
 		return nil, err
@@ -121,12 +129,13 @@ func (s *Service) Close() {
 
 func (s *Service) Status(context.Context, *bsvmspb.StatusRequest) (*bsvmspb.StatusResponse, error) {
 	return &bsvmspb.StatusResponse{
-		Network:        s.node.Network(),
-		ChainHeight:    s.node.ChainHeight(),
-		BestPeerHeight: s.node.BestPeerHeight(),
-		PeerCount:      int32(s.node.PeerCount()),
-		DataDir:        s.dataDir,
-		PeerHeights:    s.node.PeerHeights(),
+		Network:          s.node.Network(),
+		ChainHeight:      s.node.ChainHeight(),
+		BestPeerHeight:   s.node.BestPeerHeight(),
+		PeerCount:        int32(s.node.PeerCount()),
+		DataDir:          s.dataDir,
+		PeerHeights:      s.node.PeerHeights(),
+		CoinbaseMaturity: bsv.CoinbaseMaturity,
 	}, nil
 }
 
@@ -339,7 +348,12 @@ func (s *Service) Balance(ctx context.Context, req *bsvmspb.BalanceRequest) (*bs
 	if err != nil {
 		return nil, err
 	}
-	return &bsvmspb.BalanceResponse{Satoshis: tw.w.Balance(), Bsv: tw.w.BalanceBSV()}, nil
+	return &bsvmspb.BalanceResponse{
+		Satoshis:  tw.w.Balance(),
+		Bsv:       tw.w.BalanceBSV(),
+		Spendable: tw.w.SpendableBalance(),
+		Immature:  tw.w.ImmatureBalance(),
+	}, nil
 }
 
 func (s *Service) ListUTXOs(ctx context.Context, req *bsvmspb.ListUTXOsRequest) (*bsvmspb.ListUTXOsResponse, error) {
@@ -356,7 +370,14 @@ func (s *Service) ImportUTXO(ctx context.Context, req *bsvmspb.ImportUTXORequest
 		return nil, err
 	}
 	if req.GetForce() {
-		err = tw.w.ForceImportUTXO(req.GetTxid(), req.GetVout(), req.GetValue(), req.GetScript(), req.GetHeight())
+		err = tw.w.ForceImportCoin(bsv.UTXO{
+			TxID:       req.GetTxid(),
+			Vout:       req.GetVout(),
+			Value:      req.GetValue(),
+			Script:     req.GetScript(),
+			Height:     req.GetHeight(),
+			IsCoinbase: req.GetIsCoinbase(),
+		})
 	} else {
 		err = tw.w.ImportUTXO(req.GetTxid(), req.GetVout(), req.GetValue(), req.GetScript(), req.GetHeight())
 	}
@@ -490,9 +511,20 @@ func (s *Service) SpendToOutputs(ctx context.Context, req *bsvmspb.SpendToOutput
 	}
 	outs := outputSpecs(req.GetOutputs())
 	var detail *bsv.SpendDetail
-	if req.GetIgnoreFixedOutputs() {
+	switch {
+	case len(req.GetFromInputs()) > 0:
+		if req.GetIgnoreFixedOutputs() {
+			return nil, invalid("from_inputs and ignore_fixed_outputs are mutually exclusive")
+		}
+		var inputs []bsv.OutPoint
+		inputs, err = outPoints(req.GetFromInputs())
+		if err != nil {
+			return nil, err
+		}
+		detail, err = tw.w.SpendToOutputsDetailedFrom(inputs, outs)
+	case req.GetIgnoreFixedOutputs():
 		detail, err = tw.w.SpendToOutputsDetailedIgnoringFixed(outs)
-	} else {
+	default:
 		detail, err = tw.w.SpendToOutputsDetailed(outs)
 	}
 	if err != nil {
@@ -562,7 +594,11 @@ func (s *Service) ExecuteScript(ctx context.Context, req *bsvmspb.ExecuteScriptR
 		}
 		tx = parsed
 	}
-	if err := s.node.ExecuteScript(req.GetScriptSig(), req.GetScriptPubKey(), tx, int(req.GetInputIndex()), req.GetAmount()); err != nil {
+	exec := s.node.ExecuteScript
+	if req.GetStrict() {
+		exec = s.node.ExecuteScriptStrict
+	}
+	if err := exec(req.GetScriptSig(), req.GetScriptPubKey(), tx, int(req.GetInputIndex()), req.GetAmount()); err != nil {
 		return &bsvmspb.ExecuteScriptResponse{Ok: false, Error: err.Error()}, nil
 	}
 	return &bsvmspb.ExecuteScriptResponse{Ok: true}, nil
@@ -626,6 +662,265 @@ func (s *Service) StreamRejects(req *bsvmspb.StreamRejectsRequest, stream grpc.S
 	return streamAll(stream.Context(), s.rejectBroker, func(v *bsvmspb.Reject) error { return stream.Send(v) })
 }
 
+func (s *Service) TxState(ctx context.Context, req *bsvmspb.TxStateRequest) (*bsvmspb.TxStateResponse, error) {
+	tw, err := s.wallet(ctx, req.GetTenantId(), req.GetWalletId())
+	if err != nil {
+		return nil, err
+	}
+	state, known, err := tw.w.TxState(req.GetTxid())
+	if err != nil {
+		return nil, internal(err)
+	}
+	if !known {
+		return &bsvmspb.TxStateResponse{Known: false, Height: -1}, nil
+	}
+	return &bsvmspb.TxStateResponse{
+		Known:      true,
+		Height:     state.Height,
+		Confirmed:  state.Confirmed,
+		Conflicted: state.Conflicted,
+	}, nil
+}
+
+func (s *Service) AbandonTransaction(ctx context.Context, req *bsvmspb.AbandonTransactionRequest) (*bsvmspb.AbandonTransactionResponse, error) {
+	tw, err := s.wallet(ctx, req.GetTenantId(), req.GetWalletId())
+	if err != nil {
+		return nil, err
+	}
+	if err := tw.w.AbandonTransaction(req.GetTxid()); err != nil {
+		return nil, internal(err)
+	}
+	s.saveSnapshot(tw)
+	return &bsvmspb.AbandonTransactionResponse{}, nil
+}
+
+func (s *Service) ClearIgnoredOutpoints(ctx context.Context, req *bsvmspb.ClearIgnoredOutpointsRequest) (*bsvmspb.ClearIgnoredOutpointsResponse, error) {
+	tw, err := s.wallet(ctx, req.GetTenantId(), req.GetWalletId())
+	if err != nil {
+		return nil, err
+	}
+	return &bsvmspb.ClearIgnoredOutpointsResponse{Cleared: int32(tw.w.ClearIgnoredOutpoints())}, nil
+}
+
+func (s *Service) OwnsScript(ctx context.Context, req *bsvmspb.OwnsScriptRequest) (*bsvmspb.OwnsScriptResponse, error) {
+	tw, err := s.wallet(ctx, req.GetTenantId(), req.GetWalletId())
+	if err != nil {
+		return nil, err
+	}
+	return &bsvmspb.OwnsScriptResponse{Owned: tw.w.OwnsScript(req.GetScriptPubKey())}, nil
+}
+
+func (s *Service) VerifyTxSeen(ctx context.Context, req *bsvmspb.VerifyTxSeenRequest) (*bsvmspb.VerifyTxSeenResponse, error) {
+	if req.GetTxid() == "" {
+		return nil, invalid("txid required")
+	}
+	peers := int(req.GetPeersToAsk())
+	if peers <= 0 {
+		peers = 1
+	}
+	timeout := relayTimeout(req.GetTimeoutMs())
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	seen, err := s.node.VerifyTxSeen(ctx, req.GetTxid(), peers, timeout)
+	// No peer answered in time: an unverified probe, not a failed call.
+	if errors.Is(err, bsv.ErrTxUnverified) {
+		return &bsvmspb.VerifyTxSeenResponse{Seen: false}, nil
+	}
+	if err != nil {
+		return nil, internal(err)
+	}
+	return &bsvmspb.VerifyTxSeenResponse{Seen: seen}, nil
+}
+
+func (s *Service) WaitForTxRelay(ctx context.Context, req *bsvmspb.WaitForTxRelayRequest) (*bsvmspb.WaitForTxRelayResponse, error) {
+	if req.GetTxid() == "" {
+		return nil, invalid("txid required")
+	}
+	timeout := relayTimeout(req.GetTimeoutMs())
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	relayed, err := s.node.WaitForTxRelay(ctx, req.GetTxid(), timeout)
+	if errors.Is(err, bsv.ErrTxUnverified) {
+		return &bsvmspb.WaitForTxRelayResponse{Relayed: false}, nil
+	}
+	if err != nil {
+		return nil, internal(err)
+	}
+	return &bsvmspb.WaitForTxRelayResponse{Relayed: relayed}, nil
+}
+
+// relayTimeout bounds a delivery probe; 10s matches the SDK's own default.
+func relayTimeout(ms int32) time.Duration {
+	if ms <= 0 {
+		return 10 * time.Second
+	}
+	return time.Duration(ms) * time.Millisecond
+}
+
+func (s *Service) GetIncompleteCursor(ctx context.Context, req *bsvmspb.GetIncompleteCursorRequest) (*bsvmspb.GetIncompleteCursorResponse, error) {
+	tw, err := s.wallet(ctx, req.GetTenantId(), req.GetWalletId())
+	if err != nil {
+		return nil, err
+	}
+	cursor, found, err := tw.w.GetIncompleteCursor(ctx)
+	if err != nil {
+		return nil, internal(err)
+	}
+	if !found || cursor == nil {
+		return &bsvmspb.GetIncompleteCursorResponse{Found: false}, nil
+	}
+	return &bsvmspb.GetIncompleteCursorResponse{
+		Found:     true,
+		BlockHash: blockHashHex(cursor.BlockHash),
+		Height:    cursor.Height,
+		TxDone:    int32(cursor.TxDone),
+		TxTotal:   int32(cursor.TxTotal),
+	}, nil
+}
+
+func (s *Service) Rescan(req *bsvmspb.RescanRequest, stream grpc.ServerStreamingServer[bsvmspb.RescanEvent]) error {
+	ctx := stream.Context()
+	if err := s.authorize(ctx, "/bsvms.v1.BSVMS/Rescan", req); err != nil {
+		return err
+	}
+	tw, err := s.wallet(ctx, req.GetTenantId(), req.GetWalletId())
+	if err != nil {
+		return err
+	}
+	if req.GetStartBlockHash() == "" {
+		return invalid("start_block_hash required")
+	}
+	startHash, err := bsv.TxIDFromHex(req.GetStartBlockHash())
+	if err != nil {
+		return invalid("invalid start_block_hash")
+	}
+	// A wallet being rewound twice at once would have two walks racing to
+	// apply the same blocks to the same UTXO set.
+	if !s.beginRescan(tw) {
+		return status.Error(codes.FailedPrecondition, "rescan already running for this wallet")
+	}
+	defer s.endRescan(tw)
+
+	// Progress is diagnostic, so a client that reads slowly drops heartbeats
+	// rather than stalling the walk.
+	progress := make(chan *bsvmspb.RescanProgress, 64)
+	opts := rescanOptions(req)
+	opts.Progress = func(p bsv.RescanProgress) {
+		select {
+		case progress <- rescanProgressProto(p):
+		default:
+		}
+	}
+	if every := int(req.GetCheckpointEvery()); every > 0 {
+		opts.CheckpointEvery = every
+		opts.Checkpoint = func([]bsv.UTXO, [32]byte) { s.saveSnapshot(tw) }
+	}
+
+	runCtx, cancel := context.WithCancel(ctx)
+	var stats *bsv.RescanStats
+	var rescanErr error
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		stats, rescanErr = tw.w.RescanFromHash(runCtx, startHash, opts)
+		close(progress)
+	}()
+	// However this returns, the walk stops and is waited for before the
+	// per-wallet guard is released.
+	defer func() {
+		cancel()
+		<-finished
+	}()
+
+	for p := range progress {
+		if err := stream.Send(&bsvmspb.RescanEvent{Event: &bsvmspb.RescanEvent_Progress{Progress: p}}); err != nil {
+			return err
+		}
+	}
+	<-finished
+	if rescanErr != nil {
+		return internal(rescanErr)
+	}
+	return stream.Send(&bsvmspb.RescanEvent{Event: &bsvmspb.RescanEvent_Stats{Stats: rescanStatsProto(stats)}})
+}
+
+func (s *Service) beginRescan(tw *tenantWallet) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if tw.rescanning {
+		return false
+	}
+	tw.rescanning = true
+	return true
+}
+
+func (s *Service) endRescan(tw *tenantWallet) {
+	s.mu.Lock()
+	tw.rescanning = false
+	s.mu.Unlock()
+}
+
+func rescanOptions(req *bsvmspb.RescanRequest) bsv.RescanOptions {
+	// A zero leaves the SDK default in place for every field here.
+	return bsv.RescanOptions{
+		MaxBlocks:                 int(req.GetMaxBlocks()),
+		HeadersTimeout:            time.Duration(req.GetHeadersTimeoutMs()) * time.Millisecond,
+		BlockTimeout:              time.Duration(req.GetBlockTimeoutMs()) * time.Millisecond,
+		MaxConsecutiveBlockErrors: int(req.GetMaxConsecutiveBlockErrors()),
+		GCEvery:                   int(req.GetGcEvery()),
+		Prefetch:                  int(req.GetPrefetch()),
+		PrefetchBytes:             req.GetPrefetchBytes(),
+		StreamBlockBytes:          req.GetStreamBlockBytes(),
+		StartHeight:               req.GetStartHeight(),
+	}
+}
+
+func rescanProgressProto(p bsv.RescanProgress) *bsvmspb.RescanProgress {
+	return &bsvmspb.RescanProgress{
+		Phase:         p.Phase,
+		Peer:          p.Peer,
+		HeadersSeen:   int32(p.HeadersSeen),
+		BatchHeaders:  int32(p.BatchHeaders),
+		BlocksFetched: int32(p.BlocksFetched),
+		TxsReplayed:   int32(p.TxsReplayed),
+		Errors:        int32(p.Errors),
+		BlockHash:     p.BlockHash,
+		Message:       p.Message,
+	}
+}
+
+func rescanStatsProto(st *bsv.RescanStats) *bsvmspb.RescanStats {
+	if st == nil {
+		return &bsvmspb.RescanStats{StoppedHeight: -1}
+	}
+	errs := make([]string, len(st.Errors))
+	for i, err := range st.Errors {
+		errs[i] = err.Error()
+	}
+	out := &bsvmspb.RescanStats{
+		HeadersSeen:   int32(st.HeadersSeen),
+		BlocksFetched: int32(st.BlocksFetched),
+		TxsReplayed:   int32(st.TxsReplayed),
+		StoppedHeight: st.StoppedHeight,
+		PeerSwitches:  int32(st.PeerSwitches),
+		Errors:        errs,
+	}
+	if st.StoppedAt != ([32]byte{}) {
+		out.StoppedAt = blockHashHex(st.StoppedAt)
+	}
+	return out
+}
+
+// blockHashHex renders an internal (little-endian) hash in the display order
+// explorers and the rest of this API use.
+func blockHashHex(h [32]byte) string {
+	var display [32]byte
+	for i := 0; i < 32; i++ {
+		display[i] = h[31-i]
+	}
+	return hex.EncodeToString(display[:])
+}
+
 func (s *Service) registerNodeEvents() {
 	s.node.OnTransaction(func(tx *bsv.Transaction) {
 		s.txBroker.publish(s.transactionProto(tx))
@@ -641,6 +936,9 @@ func (s *Service) registerNodeEvents() {
 			}
 		}
 		s.blockBroker.publish(&bsvmspb.Block{Hash: b.Hash(), Height: b.Height, Txids: b.TxIDs(), Spends: outSpends})
+	})
+	s.node.OnBlockDisconnected(func(hash string, height int32) {
+		s.blockBroker.publish(&bsvmspb.Block{Hash: hash, Height: height, Disconnected: true})
 	})
 	s.node.OnP2PTraffic(func(t bsv.P2PTraffic) {
 		s.trafficBroker.publish(&bsvmspb.P2PTraffic{
@@ -849,6 +1147,8 @@ func (s *Service) walletProtoLocked(tw *tenantWallet) *bsvmspb.Wallet {
 		Addresses:         walletAddresses(tw.w),
 		BalanceSatoshis:   tw.w.Balance(),
 		BalanceBsv:        tw.w.BalanceBSV(),
+		SpendableSatoshis: tw.w.SpendableBalance(),
+		ImmatureSatoshis:  tw.w.ImmatureBalance(),
 		NextExternalIndex: nextExternal,
 		NextChangeIndex:   nextChange,
 		Selector:          fmt.Sprintf("%v", tw.w.Selector()),
@@ -962,10 +1262,22 @@ func outputSpecs(src []*bsvmspb.OutputSpec) []bsv.OutputSpec {
 	return out
 }
 
+func outPoints(src []*bsvmspb.OutPoint) ([]bsv.OutPoint, error) {
+	out := make([]bsv.OutPoint, len(src))
+	for i, op := range src {
+		txid, err := bsv.TxIDFromHex(op.GetTxid())
+		if err != nil {
+			return nil, invalid("invalid from_inputs txid")
+		}
+		out[i] = bsv.OutPoint{Hash: txid, Index: op.GetVout()}
+	}
+	return out, nil
+}
+
 func utxos(src []bsv.UTXO) []*bsvmspb.UTXO {
 	out := make([]*bsvmspb.UTXO, len(src))
 	for i, u := range src {
-		out[i] = &bsvmspb.UTXO{Txid: u.TxID, Vout: u.Vout, Value: u.Value, Script: u.Script, Height: u.Height}
+		out[i] = &bsvmspb.UTXO{Txid: u.TxID, Vout: u.Vout, Value: u.Value, Script: u.Script, Height: u.Height, IsCoinbase: u.IsCoinbase}
 	}
 	return out
 }

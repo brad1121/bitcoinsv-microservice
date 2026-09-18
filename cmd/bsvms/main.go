@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -34,6 +35,8 @@ func main() {
 	enableCustomSpend := flag.Bool("enable-custom-spend", envBool("BSVMS_ENABLE_CUSTOM_SPEND", false), "enable BroadcastCustomSpend RPC")
 	jwtSecret := flag.String("jwt-secret", env("BSVMS_JWT_SECRET", ""), "JWT HS256 secret, raw or base64")
 	dataKey := flag.String("data-key", env("BSVMS_DATA_KEY", ""), "32-byte AES-GCM data key, raw or base64")
+	broadcastFanout := flag.Int("broadcast-fanout", envInt("BSVMS_BROADCAST_FANOUT", 0), "peers each broadcast pushes to; 0 for all, 1 to make WaitForTxRelay usable")
+	noPendingTracking := flag.Bool("no-pending-tx-tracking", envBool("BSVMS_NO_PENDING_TX_TRACKING", false), "stop holding locally broadcast txs in memory until confirmed")
 	flag.Parse()
 	if *showVersion {
 		fmt.Println(version)
@@ -66,6 +69,9 @@ func main() {
 		EnableCustomSpend: *enableCustomSpend,
 		JWTSecret:         secretBytes(*jwtSecret),
 		DataKey:           secretBytes(*dataKey),
+
+		BroadcastFanout:          *broadcastFanout,
+		DisablePendingTxTracking: *noPendingTracking,
 	})
 	if err != nil {
 		log.Fatalf("init service: %v", err)
@@ -114,6 +120,15 @@ func envBool(key string, fallback bool) bool {
 	default:
 		return fallback
 	}
+}
+
+func envInt(key string, fallback int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return fallback
 }
 
 func secretBytes(value string) []byte {

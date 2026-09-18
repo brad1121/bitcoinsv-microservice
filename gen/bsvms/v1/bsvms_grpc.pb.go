@@ -63,6 +63,14 @@ const (
 	BSVMS_StreamWalletTransactions_FullMethodName       = "/bsvms.v1.BSVMS/StreamWalletTransactions"
 	BSVMS_StreamP2PTraffic_FullMethodName               = "/bsvms.v1.BSVMS/StreamP2PTraffic"
 	BSVMS_StreamRejects_FullMethodName                  = "/bsvms.v1.BSVMS/StreamRejects"
+	BSVMS_TxState_FullMethodName                        = "/bsvms.v1.BSVMS/TxState"
+	BSVMS_AbandonTransaction_FullMethodName             = "/bsvms.v1.BSVMS/AbandonTransaction"
+	BSVMS_ClearIgnoredOutpoints_FullMethodName          = "/bsvms.v1.BSVMS/ClearIgnoredOutpoints"
+	BSVMS_OwnsScript_FullMethodName                     = "/bsvms.v1.BSVMS/OwnsScript"
+	BSVMS_VerifyTxSeen_FullMethodName                   = "/bsvms.v1.BSVMS/VerifyTxSeen"
+	BSVMS_WaitForTxRelay_FullMethodName                 = "/bsvms.v1.BSVMS/WaitForTxRelay"
+	BSVMS_Rescan_FullMethodName                         = "/bsvms.v1.BSVMS/Rescan"
+	BSVMS_GetIncompleteCursor_FullMethodName            = "/bsvms.v1.BSVMS/GetIncompleteCursor"
 )
 
 // BSVMSClient is the client API for BSVMS service.
@@ -113,6 +121,14 @@ type BSVMSClient interface {
 	StreamWalletTransactions(ctx context.Context, in *StreamWalletTransactionsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WalletTransaction], error)
 	StreamP2PTraffic(ctx context.Context, in *StreamP2PTrafficRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[P2PTraffic], error)
 	StreamRejects(ctx context.Context, in *StreamRejectsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[Reject], error)
+	TxState(ctx context.Context, in *TxStateRequest, opts ...grpc.CallOption) (*TxStateResponse, error)
+	AbandonTransaction(ctx context.Context, in *AbandonTransactionRequest, opts ...grpc.CallOption) (*AbandonTransactionResponse, error)
+	ClearIgnoredOutpoints(ctx context.Context, in *ClearIgnoredOutpointsRequest, opts ...grpc.CallOption) (*ClearIgnoredOutpointsResponse, error)
+	OwnsScript(ctx context.Context, in *OwnsScriptRequest, opts ...grpc.CallOption) (*OwnsScriptResponse, error)
+	VerifyTxSeen(ctx context.Context, in *VerifyTxSeenRequest, opts ...grpc.CallOption) (*VerifyTxSeenResponse, error)
+	WaitForTxRelay(ctx context.Context, in *WaitForTxRelayRequest, opts ...grpc.CallOption) (*WaitForTxRelayResponse, error)
+	Rescan(ctx context.Context, in *RescanRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[RescanEvent], error)
+	GetIncompleteCursor(ctx context.Context, in *GetIncompleteCursorRequest, opts ...grpc.CallOption) (*GetIncompleteCursorResponse, error)
 }
 
 type bSVMSClient struct {
@@ -617,6 +633,95 @@ func (c *bSVMSClient) StreamRejects(ctx context.Context, in *StreamRejectsReques
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type BSVMS_StreamRejectsClient = grpc.ServerStreamingClient[Reject]
 
+func (c *bSVMSClient) TxState(ctx context.Context, in *TxStateRequest, opts ...grpc.CallOption) (*TxStateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TxStateResponse)
+	err := c.cc.Invoke(ctx, BSVMS_TxState_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *bSVMSClient) AbandonTransaction(ctx context.Context, in *AbandonTransactionRequest, opts ...grpc.CallOption) (*AbandonTransactionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AbandonTransactionResponse)
+	err := c.cc.Invoke(ctx, BSVMS_AbandonTransaction_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *bSVMSClient) ClearIgnoredOutpoints(ctx context.Context, in *ClearIgnoredOutpointsRequest, opts ...grpc.CallOption) (*ClearIgnoredOutpointsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ClearIgnoredOutpointsResponse)
+	err := c.cc.Invoke(ctx, BSVMS_ClearIgnoredOutpoints_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *bSVMSClient) OwnsScript(ctx context.Context, in *OwnsScriptRequest, opts ...grpc.CallOption) (*OwnsScriptResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(OwnsScriptResponse)
+	err := c.cc.Invoke(ctx, BSVMS_OwnsScript_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *bSVMSClient) VerifyTxSeen(ctx context.Context, in *VerifyTxSeenRequest, opts ...grpc.CallOption) (*VerifyTxSeenResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(VerifyTxSeenResponse)
+	err := c.cc.Invoke(ctx, BSVMS_VerifyTxSeen_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *bSVMSClient) WaitForTxRelay(ctx context.Context, in *WaitForTxRelayRequest, opts ...grpc.CallOption) (*WaitForTxRelayResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(WaitForTxRelayResponse)
+	err := c.cc.Invoke(ctx, BSVMS_WaitForTxRelay_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *bSVMSClient) Rescan(ctx context.Context, in *RescanRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[RescanEvent], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &BSVMS_ServiceDesc.Streams[6], BSVMS_Rescan_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[RescanRequest, RescanEvent]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type BSVMS_RescanClient = grpc.ServerStreamingClient[RescanEvent]
+
+func (c *bSVMSClient) GetIncompleteCursor(ctx context.Context, in *GetIncompleteCursorRequest, opts ...grpc.CallOption) (*GetIncompleteCursorResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetIncompleteCursorResponse)
+	err := c.cc.Invoke(ctx, BSVMS_GetIncompleteCursor_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // BSVMSServer is the server API for BSVMS service.
 // All implementations must embed UnimplementedBSVMSServer
 // for forward compatibility.
@@ -665,6 +770,14 @@ type BSVMSServer interface {
 	StreamWalletTransactions(*StreamWalletTransactionsRequest, grpc.ServerStreamingServer[WalletTransaction]) error
 	StreamP2PTraffic(*StreamP2PTrafficRequest, grpc.ServerStreamingServer[P2PTraffic]) error
 	StreamRejects(*StreamRejectsRequest, grpc.ServerStreamingServer[Reject]) error
+	TxState(context.Context, *TxStateRequest) (*TxStateResponse, error)
+	AbandonTransaction(context.Context, *AbandonTransactionRequest) (*AbandonTransactionResponse, error)
+	ClearIgnoredOutpoints(context.Context, *ClearIgnoredOutpointsRequest) (*ClearIgnoredOutpointsResponse, error)
+	OwnsScript(context.Context, *OwnsScriptRequest) (*OwnsScriptResponse, error)
+	VerifyTxSeen(context.Context, *VerifyTxSeenRequest) (*VerifyTxSeenResponse, error)
+	WaitForTxRelay(context.Context, *WaitForTxRelayRequest) (*WaitForTxRelayResponse, error)
+	Rescan(*RescanRequest, grpc.ServerStreamingServer[RescanEvent]) error
+	GetIncompleteCursor(context.Context, *GetIncompleteCursorRequest) (*GetIncompleteCursorResponse, error)
 	mustEmbedUnimplementedBSVMSServer()
 }
 
@@ -806,6 +919,30 @@ func (UnimplementedBSVMSServer) StreamP2PTraffic(*StreamP2PTrafficRequest, grpc.
 }
 func (UnimplementedBSVMSServer) StreamRejects(*StreamRejectsRequest, grpc.ServerStreamingServer[Reject]) error {
 	return status.Error(codes.Unimplemented, "method StreamRejects not implemented")
+}
+func (UnimplementedBSVMSServer) TxState(context.Context, *TxStateRequest) (*TxStateResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method TxState not implemented")
+}
+func (UnimplementedBSVMSServer) AbandonTransaction(context.Context, *AbandonTransactionRequest) (*AbandonTransactionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AbandonTransaction not implemented")
+}
+func (UnimplementedBSVMSServer) ClearIgnoredOutpoints(context.Context, *ClearIgnoredOutpointsRequest) (*ClearIgnoredOutpointsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ClearIgnoredOutpoints not implemented")
+}
+func (UnimplementedBSVMSServer) OwnsScript(context.Context, *OwnsScriptRequest) (*OwnsScriptResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method OwnsScript not implemented")
+}
+func (UnimplementedBSVMSServer) VerifyTxSeen(context.Context, *VerifyTxSeenRequest) (*VerifyTxSeenResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method VerifyTxSeen not implemented")
+}
+func (UnimplementedBSVMSServer) WaitForTxRelay(context.Context, *WaitForTxRelayRequest) (*WaitForTxRelayResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method WaitForTxRelay not implemented")
+}
+func (UnimplementedBSVMSServer) Rescan(*RescanRequest, grpc.ServerStreamingServer[RescanEvent]) error {
+	return status.Error(codes.Unimplemented, "method Rescan not implemented")
+}
+func (UnimplementedBSVMSServer) GetIncompleteCursor(context.Context, *GetIncompleteCursorRequest) (*GetIncompleteCursorResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetIncompleteCursor not implemented")
 }
 func (UnimplementedBSVMSServer) mustEmbedUnimplementedBSVMSServer() {}
 func (UnimplementedBSVMSServer) testEmbeddedByValue()               {}
@@ -1578,6 +1715,143 @@ func _BSVMS_StreamRejects_Handler(srv interface{}, stream grpc.ServerStream) err
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type BSVMS_StreamRejectsServer = grpc.ServerStreamingServer[Reject]
 
+func _BSVMS_TxState_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(TxStateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BSVMSServer).TxState(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BSVMS_TxState_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BSVMSServer).TxState(ctx, req.(*TxStateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BSVMS_AbandonTransaction_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AbandonTransactionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BSVMSServer).AbandonTransaction(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BSVMS_AbandonTransaction_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BSVMSServer).AbandonTransaction(ctx, req.(*AbandonTransactionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BSVMS_ClearIgnoredOutpoints_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ClearIgnoredOutpointsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BSVMSServer).ClearIgnoredOutpoints(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BSVMS_ClearIgnoredOutpoints_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BSVMSServer).ClearIgnoredOutpoints(ctx, req.(*ClearIgnoredOutpointsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BSVMS_OwnsScript_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(OwnsScriptRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BSVMSServer).OwnsScript(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BSVMS_OwnsScript_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BSVMSServer).OwnsScript(ctx, req.(*OwnsScriptRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BSVMS_VerifyTxSeen_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(VerifyTxSeenRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BSVMSServer).VerifyTxSeen(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BSVMS_VerifyTxSeen_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BSVMSServer).VerifyTxSeen(ctx, req.(*VerifyTxSeenRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BSVMS_WaitForTxRelay_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(WaitForTxRelayRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BSVMSServer).WaitForTxRelay(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BSVMS_WaitForTxRelay_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BSVMSServer).WaitForTxRelay(ctx, req.(*WaitForTxRelayRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BSVMS_Rescan_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(RescanRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(BSVMSServer).Rescan(m, &grpc.GenericServerStream[RescanRequest, RescanEvent]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type BSVMS_RescanServer = grpc.ServerStreamingServer[RescanEvent]
+
+func _BSVMS_GetIncompleteCursor_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetIncompleteCursorRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BSVMSServer).GetIncompleteCursor(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BSVMS_GetIncompleteCursor_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BSVMSServer).GetIncompleteCursor(ctx, req.(*GetIncompleteCursorRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // BSVMS_ServiceDesc is the grpc.ServiceDesc for BSVMS service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1737,6 +2011,34 @@ var BSVMS_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "RebroadcastPendingTransactions",
 			Handler:    _BSVMS_RebroadcastPendingTransactions_Handler,
 		},
+		{
+			MethodName: "TxState",
+			Handler:    _BSVMS_TxState_Handler,
+		},
+		{
+			MethodName: "AbandonTransaction",
+			Handler:    _BSVMS_AbandonTransaction_Handler,
+		},
+		{
+			MethodName: "ClearIgnoredOutpoints",
+			Handler:    _BSVMS_ClearIgnoredOutpoints_Handler,
+		},
+		{
+			MethodName: "OwnsScript",
+			Handler:    _BSVMS_OwnsScript_Handler,
+		},
+		{
+			MethodName: "VerifyTxSeen",
+			Handler:    _BSVMS_VerifyTxSeen_Handler,
+		},
+		{
+			MethodName: "WaitForTxRelay",
+			Handler:    _BSVMS_WaitForTxRelay_Handler,
+		},
+		{
+			MethodName: "GetIncompleteCursor",
+			Handler:    _BSVMS_GetIncompleteCursor_Handler,
+		},
 	},
 	Streams: []grpc.StreamDesc{
 		{
@@ -1767,6 +2069,11 @@ var BSVMS_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "StreamRejects",
 			Handler:       _BSVMS_StreamRejects_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "Rescan",
+			Handler:       _BSVMS_Rescan_Handler,
 			ServerStreams: true,
 		},
 	},

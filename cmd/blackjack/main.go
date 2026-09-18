@@ -132,10 +132,10 @@ func requireFunded(ctx context.Context, client bsvmspb.BSVMSClient, w wallet) {
 	if err != nil {
 		log.Fatalf("balance %s: %v", w.id, err)
 	}
-	if bal.GetSatoshis() >= defaultBet {
+	if bal.GetSpendable() >= defaultBet {
 		return
 	}
-	log.Fatalf("%s wallet has %d sats; run `docker compose up -d` and wait for blackjack-fund to complete", w.id, bal.GetSatoshis())
+	log.Fatalf("%s wallet has %d spendable sats; run `docker compose up -d` and wait for blackjack-fund to complete", w.id, bal.GetSpendable())
 }
 
 func playHand(ctx context.Context, client bsvmspb.BSVMSClient, reader *bufio.Reader, rng *rand.Rand, explorerURL string, player, house wallet) {
@@ -291,6 +291,10 @@ func showBalances(ctx context.Context, client bsvmspb.BSVMSClient) {
 		if err != nil {
 			log.Fatalf("balance %s: %v", id, err)
 		}
+		if immature := bal.GetImmature(); immature > 0 {
+			fmt.Printf("%s balance: %d sats (%d immature)\n", id, bal.GetSatoshis(), immature)
+			continue
+		}
 		fmt.Printf("%s balance: %d sats\n", id, bal.GetSatoshis())
 	}
 }
@@ -386,8 +390,8 @@ func fundMain() {
 		if err != nil {
 			log.Fatalf("balance %s: %v", w.id, err)
 		}
-		if bal.GetSatoshis() < seedSatoshis {
-			needed += seedSatoshis - bal.GetSatoshis()
+		if bal.GetSpendable() < seedSatoshis {
+			needed += seedSatoshis - bal.GetSpendable()
 		}
 	}
 	if needed > 0 {
@@ -400,10 +404,10 @@ func fundMain() {
 		if err != nil {
 			log.Fatalf("balance %s: %v", w.id, err)
 		}
-		if bal.GetSatoshis() >= seedSatoshis {
+		if bal.GetSpendable() >= seedSatoshis {
 			continue
 		}
-		txid, err := rpc.sendToAddress(ctx, w.address, seedSatoshis-bal.GetSatoshis())
+		txid, err := rpc.sendToAddress(ctx, w.address, seedSatoshis-bal.GetSpendable())
 		if err != nil {
 			log.Fatalf("fund %s: %v", w.id, err)
 		}

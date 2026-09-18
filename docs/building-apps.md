@@ -13,11 +13,20 @@ depending on a wallet SDK directly.
   and P2P broadcast handled internally.
 - **UTXO tracking** — `Balance`, `ListUTXOs`, `ProcessRawTx` for importing
   external transactions into wallet state (e.g., funding from an exchange or
-  coinbase).
+  coinbase). `Balance` separates `spendable` from `immature`, so a mining
+  reward is not counted as available before it matures.
 - **Streaming** — Real-time streams for transactions, blocks, payments, and P2P
   traffic. Useful for monitoring, indexing, or triggering downstream logic.
+  `StreamBlocks` also reports blocks a reorganisation abandoned.
 - **Script evaluation** — `ExecuteScript` to test scripts locally without
-  broadcasting.
+  broadcasting, with `strict` to check a script is one a node will relay and
+  mine rather than merely one that passes consensus.
+- **Delivery and recovery** — `WaitForTxRelay` and `VerifyTxSeen` confirm the
+  network actually relayed a broadcast; `TxState` and `AbandonTransaction`
+  resolve a transaction that is stuck or can no longer confirm.
+- **Rescan** — `GetIncompleteCursor` detects a crash mid-block at startup, and
+  `Rescan` streams a block-by-block replay to rebuild wallet state after a
+  restore or a long outage.
 
 ## App Patterns
 
@@ -38,7 +47,11 @@ certificate issuance. The OP_RETURN is visible on any BSV block explorer.
 
 Combine `SpendToOutputs` with custom scripts (via `AnyoneCanSpendOutput` or
 `BroadcastCustomSpend`) to implement token protocols, colored coins, or
-custom smart contracts on BSV.
+custom smart contracts on BSV. `SpendToOutputs` also takes `from_inputs` to
+pin coin selection to outpoints you have already chosen — the pattern for
+fanning one specific large output out into many, where letting the selector
+pick would consume the wrong coin. Validate a covenant with
+`ExecuteScript` + `strict` before you commit funds to it.
 
 ### Multi-Tenant Wallets
 
